@@ -14,14 +14,11 @@ function activeAuth(uid) {
     if (this.headers && this.headers['user-agent']) {
       let token = generateAuthToken();
       let ua = validator.trim(this.headers['user-agent']);
-      return mongoServer
-        .authActive({ua, token, uid})
-        .then(doc => {
-          return token;
-        })
-        .catch(e => {
-          return Promise.reject('存储失败！')
-        })
+      return mongoServer.authActive({ua, token, uid}).then(doc => {
+        return token;
+      }).catch(e => {
+        return Promise.reject('存储失败！')
+      })
     } else {
       return Promise.reject('授权失败！')
     }
@@ -37,14 +34,17 @@ function checkAuth() {
     if (this.headers && this.headers['user-agent']) {
       let token = validator.trim(this.headers['x-api-token']);
       let ua = validator.trim(this.headers['user-agent']);
-      return mongoServer
-        .authCheck({ua, token})
-        .then(doc => {
-          return token;
-        })
-        .catch(e => {
-          return Promise.reject('存储失败！')
-        })
+      return mongoServer.authCheck({ua, token}).then(ret => {
+        if (ret.code == 200) {
+          //  成功
+          console.log(ret)
+          return ret;
+        } else if (ret.code == 301) {
+          return Promise.reject({code: ret.code, err: ret.message});
+        }
+      }).catch(e => {
+        return Promise.reject('存储失败！')
+      })
     } else {
       return Promise.reject('验证失败！')
     }
@@ -59,14 +59,11 @@ function terminateAuth() {
     if (this.headers && this.headers['user-agent']) {
       let token = generateAuthToken();
       let ua = validator.trim(this.headers['user-agent']);
-      return mongoServer
-        .authCheck({ua, token})
-        .then(doc => {
-          return token;
-        })
-        .catch(e => {
-          return Promise.reject('存储失败！')
-        })
+      return mongoServer.authCheck({ua, token}).then(doc => {
+        return token;
+      }).catch(e => {
+        return Promise.reject('存储失败！')
+      })
     } else {
       return Promise.reject('验证失败！')
     }

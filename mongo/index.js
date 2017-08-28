@@ -2,9 +2,9 @@ const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 const config = require('./config.json');
 
-let trace = console
-  .log
-  .bind(console);
+let autoIncrement = require("mongodb-autoincrement");
+autoIncrement.setDefaults({field: 'id'});
+let trace = console.log.bind(console);
 mongoose.Promise = global.Promise;
 mongoose.connect(config.db);
 
@@ -37,7 +37,12 @@ let userSchema = mongoose.Schema({
     require: true,
     index: true,
     unique: true
-  }
+  },
+  photo: String,
+  intro: String,
+  collections: [String],
+  collectionsCount: [Schema.Types.Number],
+  permited: Boolean
 }, {
   timestamps: {
     createdAt: 'created_at',
@@ -45,22 +50,80 @@ let userSchema = mongoose.Schema({
   }
 })
 
-userSchema.methods.findPublicHitokotos = function (cb) {
-  return this
-    .model('Hitokoto')
-    .find({
-      creator_id: this._id,
-      state: 'public'
-    }, cb);
+userSchema.methods.updateCollectionName = function (oldname, newname) {
+  return this.model('hitokoto').find({creator_id: this._id, collec: oldname}).select('collections').exec().then(hitokotos => {
+    let updateList = hitokotos.map(hitokoto => {
+      let index = hitokoto.collec.indexOf(oldname)
+      if (~ index) {
+        //找到了
+        hitokoto.collec.splice(index, 1, newname);
+        hitokoto.markModified('collec');
+        return hitokoto.save();
+      } else {
+        return Promise.resolve(true);
+      }
+    });
+    if (updateList.length != 0) {
+
+      return Promise.all(updateList)
+    } else {
+      return [];
+    }
+  }).then(promiseArray => {
+    let index = this.collections.indexOf(oldname);
+    this.collections.splice(index, 1, newname);
+    this.markModified('collections');
+    return this.save();
+  });
 }
 
-userSchema.methods.findMyHitokotos = function (cb) {
-  return this
-    .model('Hitokoto')
-    .find({
-      creator_id: this._id
-    }, cb);
+userSchema.methods.deleteCollection = function (oldname) {
+  let oldnameIndex = this.collections.indexOf(oldname),
+    oldNameCount = this.collectionsCount[oldnameIndex];
+  let defaultIndex = this.collections.indexOf('默认句集'),
+    defaultCount = this.collectionsCount[defaultIndex];
+
+  return this.model('hitokoto').find({creator_id: this._id, collec: oldname}).select('collections').exec().then(hitokotos => {
+    let updateList = hitokotos.map(hitokoto => {
+      let index = hitokoto.collec.indexOf(oldname)
+      if (~ index) {
+        //找到了
+        hitokoto.collec.splice(index, 1);
+
+        if (hitokoto.collec.length == 0) {
+          hitokoto.collec.push('默认句集');
+          defaultCount += 1;
+        }
+        hitokoto.markModified('collec');
+        return hitokoto.save();
+      } else {
+        return Promise.resolve(true);
+      }
+    });
+    if (updateList.length != 0) {
+      return Promise.all(updateList)
+    } else {
+      return [];
+    }
+  }).then(promiseArray => {
+
+    this.collections.splice(oldnameIndex, 1);
+    this.collectionsCount.splice(oldnameIndex, 1);
+    this.collectionsCount[defaultIndex] = defaultCount;
+    this.markModified('collections');
+    this.markModified('collectionsCount');
+    return this.save();
+  });
 }
+let followSchema = mongoose.Schema({
+  user: {
+    type: Schema.Types.ObjectId,
+    index: true
+  },
+  follower: [Schema.Types.ObjectId],
+  following: [Schema.Types.ObjectId]
+})
+
 let hitokotoSchema = mongoose.Schema({
   hitokoto: String,
   from: String,
@@ -69,8 +132,9 @@ let hitokotoSchema = mongoose.Schema({
     type: Schema.Types.ObjectId,
     index: true
   },
+  photo: String,
   state: String,
-  tag: [String],
+  collec: [String],
   category: String
 }, {
   timestamps: {
@@ -78,6 +142,15 @@ let hitokotoSchema = mongoose.Schema({
     updatedAt: 'updated_at'
   }
 })
+hitokotoSchema.plugin(autoIncrement.mongoosePlugin, {field: 'id'});
+
+userSchema.methods.findPublicHitokotos = function () {
+  return this.model('hitokoto').find({creator_id: this._id, state: 'public'});
+}
+
+userSchema.methods.findMyHitokotos = function () {
+  return this.model('hitokoto').find({creator_id: this._id});
+}
 
 var emailPushSchema = mongoose.Schema({
   email: {
@@ -102,6 +175,7 @@ var tokenSchema = mongoose.Schema({
 
 var User = mongoose.model('user', userSchema);
 var Hitokoto = mongoose.model('hitokoto', hitokotoSchema);
+var Follow = mongoose.model('follow', followSchema);
 var Email = mongoose.model('email', emailPushSchema);
 var Token = mongoose.model('token', tokenSchema);
 
@@ -121,38 +195,37 @@ exports.creatUser = function (user, test) {
       }, {
         nickname: user.nickname
       }, {
-          email: user.email
-        }
-      ]
-  })
-    .select('username nickname email')
-    .exec()
-    .then(users => {
-      trace('查找是否有相同用户名', users)
-      if (users.length != 0) {
-        let reason = '';
-        users.forEach(_user => {
-          if (_user.username == user.username) {
-            reason += '用户名被占用！\n'
-          } else if (_user.nickname == user.nickname) {
-            reason += '昵称被占用！\n'
-          } else {
-            reason += '邮箱已经被注册过了！\n'
-          }
-        })
-        return Promise.reject(reason)
-      } else {
-        if (test) {
-          return Promise.resolve();
+        email: user.email
+      }
+    ]
+  }).select('username nickname email').exec().then(users => {
+    trace('查找是否有相同用户名', users)
+    if (users.length != 0) {
+      let reason = '';
+      users.forEach(_user => {
+        if (_user.username == user.username) {
+          reason += '用户名被占用！\n'
+        } else if (_user.nickname == user.nickname) {
+          reason += '昵称被占用！\n'
         } else {
-          return User
-            .create(user)
-            .catch(e => {
-              return Promise.reject('创建用户失败！')
-            });
+          reason += '邮箱已经被注册过了！\n'
         }
-      };
-    })
+      })
+      return Promise.reject(reason)
+    } else {
+      if (test) {
+        return Promise.resolve();
+      } else {
+        //初始化句集
+        user.collections = ['默认句集', '一百个基本'];
+        user.collectionsCount = [0, 0];
+        user.permited = true;
+        return User.create(user).catch(e => {
+          return Promise.reject('创建用户失败！')
+        });
+      }
+    };
+  })
 };
 
 /**
@@ -163,24 +236,155 @@ exports.creatUser = function (user, test) {
  * @returns {Promise<{uid:String,nickname:String}>}
  */
 exports.userLogin = function (username, password) {
-  return User
-    .findOne({username})
-    .select('_id username password nickname')
-    .exec()
-    .then(doc => {
-      if (doc) {
-        if (doc.password == password) {
-          return {uid: doc._id, nickname: doc.nickname};
-        } else {
-          return Promise.reject('用户名错误！')
-        }
-      } else {
-        return Promise.reject('用户名错误！')
+  return User.findOne({username}).select('_id username password nickname permited').exec().then(doc => {
+    if (doc) {
+      if (!doc.permited) {
+        return Promise.reject('禁止该用户访问！请联系管理员')
       }
-    }, e => {
-      console.log(e);
-      return Promise.reject('程序查询出错！')
+      if (doc.password == password) {
+        return {uid: doc._id, nickname: doc.nickname};
+      } else {
+        return Promise.reject('密码错误！')
+      }
+    } else {
+      return Promise.reject('用户名错误！')
+    }
+  }, e => {
+    console.log(e);
+    return Promise.reject('程序查询出错！')
+  })
+}
+
+/**
+ *  获得用户所有的句集
+ *
+ * @param {String} uid
+ * @returns
+ */
+exports.userCollections = function (uid) {
+  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
+    console.log(doc)
+    if (doc) {
+      if (!doc.permited) {
+        return Promise.reject('禁止访问该用户！请联系管理员')
+      }
+      return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
+
+    } else {
+      return Promise.reject('无用户！')
+    }
+  }, e => {
+    console.log(e);
+    return Promise.reject('程序查询出错！')
+  })
+}
+
+/**
+ *  更新句集的名字
+ *
+ * @param {String} uid
+ * @param {String} oldname
+ * @param {String} newname
+ * @returns
+ */
+exports.updateUserCollectionName = function (uid, oldname, newname) {
+  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
+    return doc.updateCollectionName(oldname, newname).then(doc => {
+      return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
+    });
+  }, e => {
+    console.log(e);
+    return Promise.reject('程序查询出错！')
+  })
+}
+
+/**
+ *
+ *  新建一个句集
+ * @param {String} uid
+ * @param {String} newname
+ * @returns
+ */
+exports.newUserCollection = function (uid, newname) {
+  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
+    let index = doc.collections.indexOf(newname);
+    if (~ index) {
+      //找到了
+      return Promise.reject('已经存在该句集了！')
+    } else {
+      doc.collections.push(newname);
+      doc.collectionsCount.push(0);
+      doc.markModified('collections');
+      doc.markModified('collectionsCount');
+      return doc.save().then(doc => {
+        return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
+      });
+    }
+
+  }, e => {
+    console.log(e);
+    return Promise.reject('程序查询出错！')
+  })
+}
+/**
+ *
+ * 删除用户句集
+ * @param {String} uid
+ * @param {String} oldname
+ * @returns
+ */
+exports.deleteUserCollection = function (uid, oldname) {
+  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
+    return doc.deleteCollection(oldname).then(doc => {
+      return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
+    });
+  }, e => {
+    console.log(e);
+    return Promise.reject('程序查询出错！')
+  })
+}
+
+/**
+ *
+ * 用户查看自己的句集内容
+ * @param {String} uid
+ * @param {String} name
+ * @returns
+ */
+exports.viewUserCollection = function (uid, name) {
+  return Hitokoto.find({
+    creator_id: uid,
+    collec: name
+  }, 'hitokoto id from creator creator_id collec created_at category ').exec().then(hitokotos => {
+    return hitokotos.map(hito => hito.toJSON())
+  }, e => {
+    console.log(e);
+    return Promise.reject('程序查询出错！')
+  })
+}
+
+/**
+ *   新建hitokoto
+ *
+ * @param {Object} hitokoto
+ * @returns
+ */
+exports.createHitokoto = function (hitokoto, uid, name) {
+  return Hitokoto.create(hitokoto).then(hitokoto => {
+    return User.findOne({_id: uid}).exec().then(user => {
+      console.log(user);
+      let index = user.collections.indexOf(name);
+      let org = user.collectionsCount[index];
+      user.collectionsCount[index] = org + 1;
+      user.markModified('collectionsCount');
+      return user.save()
+    }).then(() => {
+      return hitokoto
     })
+  }, e => {
+    console.log(e);
+    return Promise.reject('创建hitokoto失败！！')
+  })
 }
 
 /**
@@ -198,34 +402,29 @@ exports.doEmailVerify = function (email, code) {
   return Email.find({
     email: email,
     code: code.toUpperCase(),
-      time: {
-        $gt: _10M_Before
-      }
-    })
-    .sort({time: -1})
-    .exec()
-    .then((docs) => {
-      if (docs.length == 0) {
-        return Promise.reject('验证码错误！');
-      }
-      //  else if (docs.length > 1) {   docs.sort((e1, e2) => {     return e2.time -
-      // e1.time   }); }
+    time: {
+      $gt: _10M_Before
+    }
+  }).sort({time: -1}).exec().then((docs) => {
+    if (docs.length == 0) {
+      return Promise.reject('验证码错误！');
+    }
+    //  else if (docs.length > 1) {   docs.sort((e1, e2) => {     return e2.time -
+    // e1.time   }); }
 
-      let latest = docs[0];
+    let latest = docs[0];
 
-      if (latest.wasted) {
-        return Promise.reject('该验证码已经被使用过了！')
-      } else {
-        latest.wasted = true;
-        return latest
-          .save()
-          .catch(reason => {
-            trace('保存修改的验证码失败', reason);
-            return Promise.reject('保存验证码失败！');
-          })
+    if (latest.wasted) {
+      return Promise.reject('该验证码已经被使用过了！')
+    } else {
+      latest.wasted = true;
+      return latest.save().catch(reason => {
+        trace('保存修改的验证码失败', reason);
+        return Promise.reject('保存验证码失败！');
+      })
 
-      }
-    })
+    }
+  })
 }
 
 /**
@@ -233,17 +432,10 @@ exports.doEmailVerify = function (email, code) {
  *
  * @param {String} email
  * @param {String} code
- * @returns  {Promise<String code>}
+ * @returns  {Promise<String>}
  */
 exports.storeEmailVerify = function (email, code) {
-  return new Email({
-      email: email,
-      code: code,
-      wasted: false,
-      time: Date.now()
-    })
-    .save()
-    .then(() => code)
+  return new Email({email: email, code: code, wasted: false, time: Date.now()}).save().then(() => code)
 }
 
 /**
@@ -266,49 +458,53 @@ exports.authActive = function ({ua, uid, token}) {
   })
 }
 
+/**
+ *  验证token是否是属于某个用户
+ *
+ * @param  {{ua:String,token:String}}
+ * @returns
+ */
 exports.authCheck = function ({ua, token}) {
-  return Token
-    .findOne({token, ua, trust: true})
-    .exec()
-    .then(token => {
-      if (token) {
-        let expireTime = token.time;
-        if (Date.now() < expireTime) {
-          return '授权成功！'
-        }
+  return Token.findOne({token, ua, trust: true}).exec().then(token => {
+    if (token) {
+      let expireTime = token.time;
+      if (Date.now() < expireTime) {
+        return {uid: token.uid, code: 200}
+      } else {
+        return {uid: token.uid, message: '授权过期，请重新登录', code: 301}
       }
-      return Promise.reject('授权失败')
-    })
-    .catch(e => {
-      trace('save token', e)
-      return Promise.reject('授权失败')
-    })
+    }
+    return Promise.reject('授权失败')
+  }).catch(e => {
+    trace('save token', e)
+    return Promise.reject('授权失败')
+  })
 }
 
+/**
+ *
+ * 禁用一个token
+ * @param {String} {ua, token}
+ * @returns
+ */
 exports.authTerminate = function ({ua, token}) {
-  return Token
-    .findOne({token, ua})
-    .exec()
-    .then(tokenDoc => {
-      if (tokenDoc) {
-        if (tokenDoc.trust) {
-          tokenDoc.trust = false;
-          return tokenDoc
-            .save()
-            .then(() => {
-              return 'OK';
-            }, e => {
-              return Promise.reject('撤销授权失败')
-            })
-        } else {
+  return Token.findOne({token, ua}).exec().then(tokenDoc => {
+    if (tokenDoc) {
+      if (tokenDoc.trust) {
+        tokenDoc.trust = false;
+        return tokenDoc.save().then(() => {
           return 'OK';
-        }
+        }, e => {
+          return Promise.reject('撤销授权失败')
+        })
       } else {
-        return Promise.reject('授权失败')
+        return 'OK';
       }
-    })
-    .catch(e => {
-      trace('save token', e)
-      return Promise.reject('撤销失败')
-    })
+    } else {
+      return Promise.reject('授权失败')
+    }
+  }).catch(e => {
+    trace('save token', e)
+    return Promise.reject('撤销失败')
+  })
 }
