@@ -17,7 +17,7 @@ function activeAuth(uid) {
       return mongoServer.authActive({ua, token, uid}).then(doc => {
         return token;
       }).catch(e => {
-        return Promise.reject('存储失败！')
+        return Promise.reject('保存授权失败！')
       })
     } else {
       return Promise.reject('授权失败！')
@@ -43,7 +43,7 @@ function checkAuth() {
           return Promise.reject({code: ret.code, err: ret.message});
         }
       }).catch(e => {
-        return Promise.reject('存储失败！')
+        return Promise.reject('无授权！')
       })
     } else {
       return Promise.reject('验证失败！')
@@ -62,7 +62,7 @@ function terminateAuth() {
       return mongoServer.authCheck({ua, token}).then(doc => {
         return token;
       }).catch(e => {
-        return Promise.reject('存储失败！')
+        return Promise.reject('停用授权异常！')
       })
     } else {
       return Promise.reject('验证失败！')

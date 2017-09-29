@@ -355,7 +355,7 @@ exports.viewUserCollection = function (uid, name) {
   return Hitokoto.find({
     creator_id: uid,
     collec: name
-  }, 'hitokoto id from creator creator_id collec created_at category ').exec().then(hitokotos => {
+  }, 'hitokoto id from creator creator_id collec created_at category ').sort({created_at: -1}).exec().then(hitokotos => {
     return hitokotos.map(hito => hito.toJSON())
   }, e => {
     console.log(e);

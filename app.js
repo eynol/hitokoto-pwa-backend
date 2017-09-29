@@ -304,17 +304,17 @@ server.put('/api/collections/:name', function (req, res, next) {
     let name = req.params.name;
     name = validator.trim(name);
 
-    let {hitokoto, 'from': source, type, creator} = req.body;
+    let {hitokoto, 'from': source, category, creator} = req.body;
     hitokoto = validator.trim(hitokoto);
     source = validator.trim(source);
-    type = validator.trim(type);
+    category = validator.trim(category);
     creator = validator.trim(creator);
 
     req.hitoAuthCheck().then(ret => {
       return mongoServer.createHitokoto({
         id: 1,
         from: source,
-        category: type,
+        category,
         hitokoto,
         creator,
         creator_id: ret.uid,
