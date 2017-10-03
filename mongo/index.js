@@ -159,6 +159,8 @@ var emailPushSchema = mongoose.Schema({
     index: true
   },
   code: String,
+  token: String,
+  whatfor: String,
   wasted: Boolean,
   time: Number
 })
@@ -169,6 +171,7 @@ var tokenSchema = mongoose.Schema({
   },
   uid: Schema.Types.ObjectId,
   time: Number,
+  whatfor: String,
   ua: String,
   trust: Boolean
 })
@@ -187,7 +190,6 @@ var Token = mongoose.model('token', tokenSchema);
  * @returns
  */
 exports.creatUser = function (user, test) {
-
   return User.find({
     "$or": [
       {
@@ -228,6 +230,75 @@ exports.creatUser = function (user, test) {
   })
 };
 
+/**
+ * 由用户id查询用户
+ *
+ * @param {String} uid
+ * @returns
+ */
+exports.getUserByUid = function (uid) {
+  return User.findById(uid).select('username nickname email').exec().then(user => {
+    trace('由uid查询用户', user);
+    if (user) {
+      return user;
+    } else {
+      return {username: 'foolish', nickname: 'foolish', email: 'foolish@foolishmind.shit'}
+    }
+  })
+};
+
+/**
+ * 由邮箱查询用户
+ *
+ * @param {String} email
+ * @returns
+ */
+exports.getUserByEmail = function (email) {
+  return User.findOne({email}).select('username nickname email').exec()
+};
+
+/**
+ * 更改用户的邮箱；
+ *
+ * @param {String} uid
+ * @param {String} email
+ * @returns
+ */
+exports.updateUserEmail = function (uid, email) {
+  return User.findByIdAndUpdate(uid, {email: email}).select('username nickname email').exec().then(user => {
+    trace('修改用户邮箱', user);
+    if (user) {
+      return user;
+    } else {
+      return {username: 'foolish', nickname: 'foolish', email: 'foolish@foolishmind.shit'}
+    }
+  })
+};
+
+/**
+ * 修改用户密码
+ *
+ * @param {String} uid
+ * @param {String} oldpassword
+ * @param {String} newpassword
+ * @returns
+ */
+exports.updateUserPassword = function (uid, oldpassword, newpassword) {
+  return User.findById(uid).select('username password email').exec().then(user => {
+    trace('修改用户密码', user);
+    if (user) {
+
+      if (user.password == oldpassword) {
+        user.password = newpassword;
+        return user.save()
+      } else {
+        return Promise.reject('原密码错误!');
+      }
+    } else {
+      return Promise.reject('没有该用户！');
+    }
+  })
+};
 /**
  *  用户登录验证,成功返回用户id 和用户昵称
  *
@@ -367,6 +438,8 @@ exports.viewUserCollection = function (uid, name) {
  *   新建hitokoto
  *
  * @param {Object} hitokoto
+ * @param {String} uid
+ * @param {String} name
  * @returns
  */
 exports.createHitokoto = function (hitokoto, uid, name) {
@@ -388,26 +461,85 @@ exports.createHitokoto = function (hitokoto, uid, name) {
 }
 
 /**
+ *   更新hitokoto
+ *
+ * @param {Object} hitokoto
+ * @param {Sting} hid
+ * @returns
+ */
+exports.updateHitokoto = function (hitokoto, hid) {
+
+  return Hitokoto.findByIdAndUpdate(hid, hitokoto).exec().then(hitokoto => {
+    return '更新hitokoto成功！';
+  }, e => {
+    console.log(e);
+    return Promise.reject('修改hitokoto失败！！')
+  })
+}
+
+/**
+ *   删除hitokoto
+ *
+ * @param {Object} hitokoto
+ * @param {Sting} hid
+ * @returns
+ */
+exports.deleteHitokoto = function (hid) {
+
+  return Hitokoto.findByIdAndRemove(hid).exec().then(hitokoto => {
+    if (!hitokoto) {
+      return Promise.reject('找不到对应的句子！')
+    }
+
+    let uid = hitokoto.creator_id;
+    let collec = hitokoto.collec[0];
+
+    return User.findById(uid).exec().then(user => {
+
+      let collections = user.collections,
+        collectionsCount = user.collectionsCount;
+      let index = user.collections.indexOf(collec);
+      if (~ index) {
+        user.collectionsCount[index] -= 1;
+        console.log('user collection count ', collectionsCount)
+        user.markModified('collectionsCount');
+        return user.save().then(() => '删除hitokoto成功！')
+      } else {
+        return '删除hitokoto成功！';
+      }
+    })
+  }, e => {
+    console.log(e);
+    return Promise.reject('删除hitokoto失败！！')
+  })
+}
+
+/**
  *  验证存储的邮箱和验证码，返回创建的DB文档
  *
  * @param {String} email
  * @param {String} code - 邮箱验证码
  * @returns {Promise<Document>}
  */
-exports.doEmailVerify = function (email, code) {
+exports.doEmailVerify = function (email, code, whatfor, token) {
   // let LIMIT_10M = 10*60*1000;
   let LIMIT_10M = 600000;
   let _10M_Before = Date.now() - LIMIT_10M;
-
-  return Email.find({
+  let query = {
     email: email,
     code: code.toUpperCase(),
     time: {
       $gt: _10M_Before
-    }
-  }).sort({time: -1}).exec().then((docs) => {
+    },
+    whatfor
+  };
+  if (token) {
+    query.token = token;
+  }
+
+  return Email.find(query).sort({time: -1}).exec().then((docs) => {
     if (docs.length == 0) {
-      return Promise.reject('验证码错误！');
+      return Promise.reject('验证码错误或超时！');
     }
     //  else if (docs.length > 1) {   docs.sort((e1, e2) => {     return e2.time -
     // e1.time   }); }
@@ -434,8 +566,18 @@ exports.doEmailVerify = function (email, code) {
  * @param {String} code
  * @returns  {Promise<String>}
  */
-exports.storeEmailVerify = function (email, code) {
-  return new Email({email: email, code: code, wasted: false, time: Date.now()}).save().then(() => code)
+exports.storeEmailVerify = function (email, code, whatfor, token) {
+  let query = {
+    email: email,
+    code: code,
+    wasted: false,
+    time: Date.now(),
+    whatfor
+  };
+  if (token) {
+    query.token = token;
+  }
+  return new Email(query).save().then(() => code)
 }
 
 /**

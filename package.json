@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "crypto-js": "^3.1.9-1",
+    "lodash": "^4.17.4",
     "mongodb-autoincrement": "^1.0.1",
     "mongoose": "^4.11.7",
     "nodemailer": "^4.0.1",
