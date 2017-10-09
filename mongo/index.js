@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 const config = require('./config.json');
+const co = require('co');
 
 let autoIncrement = require("mongodb-autoincrement");
 autoIncrement.setDefaults({field: 'id'});
@@ -14,6 +15,8 @@ db.on('open', function (some) {
   // we're connected!
   console.log('db open!', some)
 });
+
+let GLOBAL_PUBLIC_HITOKOTO_NUMBER = null;
 
 let userSchema = mongoose.Schema({
   username: {
@@ -40,8 +43,6 @@ let userSchema = mongoose.Schema({
   },
   photo: String,
   intro: String,
-  collections: [String],
-  collectionsCount: [Schema.Types.Number],
   permited: Boolean
 }, {
   timestamps: {
@@ -50,71 +51,28 @@ let userSchema = mongoose.Schema({
   }
 })
 
+userSchema.methods.changePermit = function (permited) {
+  this.permited = permited;
+  return this.save();
+}
+
+userSchema.methods.createDefaultCollection = function () {
+  return this.model('folder').create({name: '默认句集', owner: this._id, count: 0, state: 'public'});
+};
+userSchema.methods.myCollections = function () {
+  return this.model('folder').find({owner: this._id}).sort({'updated_at': -1});
+};
+
 userSchema.methods.updateCollectionName = function (oldname, newname) {
-  return this.model('hitokoto').find({creator_id: this._id, collec: oldname}).select('collections').exec().then(hitokotos => {
-    let updateList = hitokotos.map(hitokoto => {
-      let index = hitokoto.collec.indexOf(oldname)
-      if (~ index) {
-        //找到了
-        hitokoto.collec.splice(index, 1, newname);
-        hitokoto.markModified('collec');
-        return hitokoto.save();
-      } else {
-        return Promise.resolve(true);
-      }
-    });
-    if (updateList.length != 0) {
-
-      return Promise.all(updateList)
-    } else {
-      return [];
+  return this.model('folder').findOne({owner: this._id, name: oldname}).exec().then(collection => {
+    if (!collection) {
+      return Promise.reject('没有这个名字的句集')
     }
-  }).then(promiseArray => {
-    let index = this.collections.indexOf(oldname);
-    this.collections.splice(index, 1, newname);
-    this.markModified('collections');
-    return this.save();
+    collection.name = newname;
+    return collection.save()
   });
 }
 
-userSchema.methods.deleteCollection = function (oldname) {
-  let oldnameIndex = this.collections.indexOf(oldname),
-    oldNameCount = this.collectionsCount[oldnameIndex];
-  let defaultIndex = this.collections.indexOf('默认句集'),
-    defaultCount = this.collectionsCount[defaultIndex];
-
-  return this.model('hitokoto').find({creator_id: this._id, collec: oldname}).select('collections').exec().then(hitokotos => {
-    let updateList = hitokotos.map(hitokoto => {
-      let index = hitokoto.collec.indexOf(oldname)
-      if (~ index) {
-        //找到了
-        hitokoto.collec.splice(index, 1);
-
-        if (hitokoto.collec.length == 0) {
-          hitokoto.collec.push('默认句集');
-          defaultCount += 1;
-        }
-        hitokoto.markModified('collec');
-        return hitokoto.save();
-      } else {
-        return Promise.resolve(true);
-      }
-    });
-    if (updateList.length != 0) {
-      return Promise.all(updateList)
-    } else {
-      return [];
-    }
-  }).then(promiseArray => {
-
-    this.collections.splice(oldnameIndex, 1);
-    this.collectionsCount.splice(oldnameIndex, 1);
-    this.collectionsCount[defaultIndex] = defaultCount;
-    this.markModified('collections');
-    this.markModified('collectionsCount');
-    return this.save();
-  });
-}
 let followSchema = mongoose.Schema({
   user: {
     type: Schema.Types.ObjectId,
@@ -124,9 +82,34 @@ let followSchema = mongoose.Schema({
   following: [Schema.Types.ObjectId]
 })
 
+let collectionSchema = mongoose.Schema({
+  name: String,
+  owner: {
+    type: Schema.Types.ObjectId,
+    index: true
+  },
+  count: Number,
+  state: String
+}, {
+  timestamps: {
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
+  }
+});
+collectionSchema.methods.countAll = function () {
+  return this.model('hitokoto').find({fid: this._id}).count().exec()
+}
+
 let hitokotoSchema = mongoose.Schema({
   hitokoto: String,
-  from: String,
+  author: {
+    type: Schema.Types.String,
+    index: true
+  },
+  source: {
+    type: Schema.Types.String,
+    index: true
+  },
   creator: String,
   creator_id: {
     type: Schema.Types.ObjectId,
@@ -134,23 +117,27 @@ let hitokotoSchema = mongoose.Schema({
   },
   photo: String,
   state: String,
-  collec: [String],
-  category: String
+  fid: {
+    type: Schema.Types.ObjectId,
+    index: true
+  },
+  category: {
+    type: Schema.Types.String,
+    index: true
+  }
 }, {
   timestamps: {
     createdAt: 'created_at',
     updatedAt: 'updated_at'
   }
 })
+
+hitokotoSchema.methods.getMyCollectionName = function () {
+  return this.model('folder').findOne({
+    _id: this.fid
+  }, {name: 1}).exec().then(collection => collection.name);
+}
 hitokotoSchema.plugin(autoIncrement.mongoosePlugin, {field: 'id'});
-
-userSchema.methods.findPublicHitokotos = function () {
-  return this.model('hitokoto').find({creator_id: this._id, state: 'public'});
-}
-
-userSchema.methods.findMyHitokotos = function () {
-  return this.model('hitokoto').find({creator_id: this._id});
-}
 
 var emailPushSchema = mongoose.Schema({
   email: {
@@ -163,7 +150,7 @@ var emailPushSchema = mongoose.Schema({
   whatfor: String,
   wasted: Boolean,
   time: Number
-})
+});
 var tokenSchema = mongoose.Schema({
   token: {
     type: String,
@@ -174,13 +161,26 @@ var tokenSchema = mongoose.Schema({
   whatfor: String,
   ua: String,
   trust: Boolean
-})
+});
+
+var throttleSchema = mongoose.Schema({
+  key: {
+    type: Schema.Types.String
+  },
+  namespace: String
+});
+
+throttleSchema.index({
+  key: 1
+}, {expireAfterSeconds: 60 *60});
 
 var User = mongoose.model('user', userSchema);
 var Hitokoto = mongoose.model('hitokoto', hitokotoSchema);
+var Collection = mongoose.model('folder', collectionSchema);
 var Follow = mongoose.model('follow', followSchema);
 var Email = mongoose.model('email', emailPushSchema);
 var Token = mongoose.model('token', tokenSchema);
+var Throttle = mongoose.model('throttle', throttleSchema);
 
 /**
  *  创建新建用户，test为true时只测试用户是否存在，不创建用户
@@ -218,16 +218,15 @@ exports.creatUser = function (user, test) {
       if (test) {
         return Promise.resolve();
       } else {
-        //初始化句集
-        user.collections = ['默认句集', '一百个基本'];
-        user.collectionsCount = [0, 0];
         user.permited = true;
-        return User.create(user).catch(e => {
-          return Promise.reject('创建用户失败！')
-        });
+        return User.create(user).then(user => {
+          return user.createDefaultCollection().then(() => user);
+        })
       }
     };
-  })
+  }).catch(e => {
+    return Promise.reject('创建用户失败！')
+  });
 };
 
 /**
@@ -242,7 +241,7 @@ exports.getUserByUid = function (uid) {
     if (user) {
       return user;
     } else {
-      return {username: 'foolish', nickname: 'foolish', email: 'foolish@foolishmind.shit'}
+      return;
     }
   })
 };
@@ -258,6 +257,50 @@ exports.getUserByEmail = function (email) {
 };
 
 /**
+ * 获得用户的基本资料；用户名 头像 个性签名
+ *
+ * @param {String} uid
+ * @returns
+ *
+ */
+exports.exploreUser = function (uid) {
+  return User.findById(uid).select('nickname intro photo permited').exec().then(user => {
+    trace('获得用户的基本资料；', user);
+    if (user) {
+      if (user.permited) {
+        return user.myCollections().then(collections => {
+          let ret = user.toObject();
+          ret.collections = collections.reduce((list, v) => {
+            if (v.state == 'public') {
+              list.push(v.toObject())
+            }
+            return list;
+          }, []);
+          return ret;
+        })
+      } else {
+        return Promise.reject('该用户已被禁用！');
+      }
+    } else {
+      return Promise.reject('无该用户！');
+    }
+  })
+};
+
+/**
+ * 获得用户的基本资料；用户名 头像 个性签名
+ *
+ * @param {String} uid
+ * @param {String} cName
+ * @returns
+ *
+ */
+exports.exploreUserCollection = function (uid, cName, page = 1, perpage = 20) {
+  return Collection.findOne({owner: uid, name: cName}).exec().then(collection => {
+    return Hitokoto.find({creator_id: uid, fid: collection._id}).sort({created_at: -1}).skip((page - 1) * perpage).limit(perpage).exec()
+  })
+};
+/**
  * 更改用户的邮箱；
  *
  * @param {String} uid
@@ -265,14 +308,7 @@ exports.getUserByEmail = function (email) {
  * @returns
  */
 exports.updateUserEmail = function (uid, email) {
-  return User.findByIdAndUpdate(uid, {email: email}).select('username nickname email').exec().then(user => {
-    trace('修改用户邮箱', user);
-    if (user) {
-      return user;
-    } else {
-      return {username: 'foolish', nickname: 'foolish', email: 'foolish@foolishmind.shit'}
-    }
-  })
+  return User.findByIdAndUpdate(uid, {email: email}).select('username nickname email').exec()
 };
 
 /**
@@ -333,19 +369,32 @@ exports.userLogin = function (username, password) {
  * @returns
  */
 exports.userCollections = function (uid) {
-  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
-    console.log(doc)
-    if (doc) {
-      if (!doc.permited) {
+  return User.findById(uid).exec().then(user => {
+
+    if (user) {
+      if (!user.permited) {
         return Promise.reject('禁止访问该用户！请联系管理员')
       }
-      return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
-
+      console.log('start', Date.now());
+      return user.myCollections().exec().then(collections => {
+        //  得到集合内hitokoto的总数；
+        return Promise.all(collections.map(v => v.countAll())).then(countList => {
+          console.log(countList);
+          return collections.map((collection, index) => {
+            collection = collection.toObject();
+            collection.count = countList[index];
+            return collection;
+          })
+        }).then(ret => {
+          console.log('end', Date.now());
+          return ret
+        })
+      });
     } else {
       return Promise.reject('无用户！')
     }
   }, e => {
-    console.log(e);
+
     return Promise.reject('程序查询出错！')
   })
 }
@@ -359,13 +408,8 @@ exports.userCollections = function (uid) {
  * @returns
  */
 exports.updateUserCollectionName = function (uid, oldname, newname) {
-  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
-    return doc.updateCollectionName(oldname, newname).then(doc => {
-      return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
-    });
-  }, e => {
-    console.log(e);
-    return Promise.reject('程序查询出错！')
+  return User.findById(uid).exec().then(doc => {
+    return doc.updateCollectionName(oldname, newname);
   })
 }
 
@@ -376,25 +420,13 @@ exports.updateUserCollectionName = function (uid, oldname, newname) {
  * @param {String} newname
  * @returns
  */
-exports.newUserCollection = function (uid, newname) {
-  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
-    let index = doc.collections.indexOf(newname);
-    if (~ index) {
-      //找到了
+exports.newUserCollection = function (uid, newname, state = 'public') {
+  return Collection.findOne({owner: uid, name: newname}).exec().then(collection => {
+    if (collection) {
       return Promise.reject('已经存在该句集了！')
     } else {
-      doc.collections.push(newname);
-      doc.collectionsCount.push(0);
-      doc.markModified('collections');
-      doc.markModified('collectionsCount');
-      return doc.save().then(doc => {
-        return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
-      });
+      return Collection.create({owner: uid, name: newname, count: 0, state})
     }
-
-  }, e => {
-    console.log(e);
-    return Promise.reject('程序查询出错！')
   })
 }
 /**
@@ -405,14 +437,8 @@ exports.newUserCollection = function (uid, newname) {
  * @returns
  */
 exports.deleteUserCollection = function (uid, oldname) {
-  return User.findOne({_id: uid}).select('_id collections collectionsCount permited').exec().then(doc => {
-    return doc.deleteCollection(oldname).then(doc => {
-      return doc.collections.map((collecName, index) => ({name: collecName, count: doc.collectionsCount[index]}));
-    });
-  }, e => {
-    console.log(e);
-    return Promise.reject('程序查询出错！')
-  })
+  return Collection.findOneAndRemove({owner: uid, name: oldname})
+
 }
 
 /**
@@ -422,15 +448,9 @@ exports.deleteUserCollection = function (uid, oldname) {
  * @param {String} name
  * @returns
  */
-exports.viewUserCollection = function (uid, name) {
-  return Hitokoto.find({
-    creator_id: uid,
-    collec: name
-  }, 'hitokoto id from creator creator_id collec created_at category ').sort({created_at: -1}).exec().then(hitokotos => {
-    return hitokotos.map(hito => hito.toJSON())
-  }, e => {
-    console.log(e);
-    return Promise.reject('程序查询出错！')
+exports.viewUserCollection = function (uid, name, page, perpage) {
+  return Collection.findOne({owner: uid, name: name}).then(collection => {
+    return Hitokoto.find({creator_id: uid, fid: collection._id}).sort({created_at: -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => hitokotos.map(hitokoto => hitokoto.toObject()))
   })
 }
 
@@ -442,22 +462,33 @@ exports.viewUserCollection = function (uid, name) {
  * @param {String} name
  * @returns
  */
-exports.createHitokoto = function (hitokoto, uid, name) {
-  return Hitokoto.create(hitokoto).then(hitokoto => {
-    return User.findOne({_id: uid}).exec().then(user => {
-      console.log(user);
-      let index = user.collections.indexOf(name);
-      let org = user.collectionsCount[index];
-      user.collectionsCount[index] = org + 1;
-      user.markModified('collectionsCount');
-      return user.save()
-    }).then(() => {
-      return hitokoto
+exports.createHitokoto = function (uid, name, hitokoto) {
+  return User.findById(uid, {nickname: 1}).then(user => {
+
+    hitokoto.creator = user.nickname; //添加用户名
+
+    return Collection.findOne({owner: uid, name: name}).then(collection => {
+
+      hitokoto.fid = collection._id; //添加fid
+
+      if (hitokoto.state == 'public') {
+        ++GLOBAL_PUBLIC_HITOKOTO_NUMBER;
+        return Hitokoto.create(hitokoto).then(hitokoto => {
+          return Collection.findByIdAndUpdate(collection._id, {
+            $inc: {
+              count: 1
+            }
+          }).then(() => hitokoto)
+        }, e => {
+          console.log(e);
+          return Promise.reject('创建hitokoto失败！！')
+        })
+      } else {
+        return Hitokoto.create(hitokoto)
+      }
     })
-  }, e => {
-    console.log(e);
-    return Promise.reject('创建hitokoto失败！！')
   })
+
 }
 
 /**
@@ -467,10 +498,22 @@ exports.createHitokoto = function (hitokoto, uid, name) {
  * @param {Sting} hid
  * @returns
  */
-exports.updateHitokoto = function (hitokoto, hid) {
+exports.updateHitokoto = function (hid, hitokoto) {
 
-  return Hitokoto.findByIdAndUpdate(hid, hitokoto).exec().then(hitokoto => {
-    return '更新hitokoto成功！';
+  return Hitokoto.findByIdAndUpdate(hid, hitokoto, {new: false}).exec().then(oldHitokoto => {
+    if (hitokoto.state !== oldHitokoto.state) {
+      console.log('hitokoto状态不相等');
+      return Collection.findByIdAndUpdate(oldHitokoto.fid, {
+        $inc: {
+          count: (hitokoto.state == 'public'
+            ? 1
+            : -1)
+        }
+      }).exec();
+    } else {
+      return
+    }
+
   }, e => {
     console.log(e);
     return Promise.reject('修改hitokoto失败！！')
@@ -490,27 +533,41 @@ exports.deleteHitokoto = function (hid) {
     if (!hitokoto) {
       return Promise.reject('找不到对应的句子！')
     }
-
-    let uid = hitokoto.creator_id;
-    let collec = hitokoto.collec[0];
-
-    return User.findById(uid).exec().then(user => {
-
-      let collections = user.collections,
-        collectionsCount = user.collectionsCount;
-      let index = user.collections.indexOf(collec);
-      if (~ index) {
-        user.collectionsCount[index] -= 1;
-        console.log('user collection count ', collectionsCount)
-        user.markModified('collectionsCount');
-        return user.save().then(() => '删除hitokoto成功！')
-      } else {
-        return '删除hitokoto成功！';
-      }
-    })
+    if (hitokoto.state == 'public') {
+      --GLOBAL_PUBLIC_HITOKOTO_NUMBER;
+      let fid = hitokoto.fid;
+      return Collection.findByIdAndUpdate(fid, {
+        $inc: {
+          count: -1
+        }
+      })
+    } else {
+      return hitokoto;
+    }
   }, e => {
     console.log(e);
     return Promise.reject('删除hitokoto失败！！')
+  })
+}
+
+exports.searchAllPublicHitokotos = function (page, perpage) {
+  page = page || 1;
+  perpage = perpage || 20;
+  return Hitokoto.find({
+    state: 'public'
+  }, {
+    _id: 0,
+    _v: 0
+  }).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
+    console.log(hitokotos);
+    return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
+      console.log(nameList);
+      return hitokotos.map((hitokoto, index) => {
+        hitokoto = hitokoto.toObject();
+        hitokoto.collection = nameList[index];
+        return hitokoto;
+      })
+    })
   })
 }
 
@@ -649,4 +706,92 @@ exports.authTerminate = function ({ua, token}) {
     trace('save token', e)
     return Promise.reject('撤销失败')
   })
+}
+
+exports.getPublicHitokotoCount = function () {
+  if (GLOBAL_PUBLIC_HITOKOTO_NUMBER === null) {
+    return Hitokoto.count({state: 'public'}).exec().then(count => {
+      GLOBAL_PUBLIC_HITOKOTO_NUMBER = count;
+      return GLOBAL_PUBLIC_HITOKOTO_NUMBER;
+    });
+  } else {
+    return Promise.resolve(GLOBAL_PUBLIC_HITOKOTO_NUMBER)
+  }
+}
+
+/**
+ *  CORS API
+ */
+
+/**
+ * 跨域获取某一个集合内的hitokoto;
+ */
+exports.corsUserCollection = function (username, collectionName, lastMagicNumber) {
+  return User.findOne({nickname: username}).exec().then(user => {
+    if (!user) {
+      return Promise.reject('用户不存在！')
+    } else if (!user.permited) {
+      return Promise.reject('用户被封禁！')
+    } else {
+      return Collection.findOne({owner: user._id, name: collectionName}).exec().then(collection => {
+        if (!collection) {
+          return Promise.reject('句集不存在！')
+        } else if (collection.state !== 'public') {
+          return Promise.reject('该句集不公开，无法获取！')
+        } else {
+          let count = collection.count;
+          let skipCount;
+          if (lastMagicNumber) {
+            skipCount = lastMagicNumber % count;
+          } else {
+            skipCount = Math.floor(Math.random() * count);
+          }
+          return Hitokoto.find({
+            creator_id: user._id,
+            fid: collection._id,
+            state: 'public'
+          }, {__v: 0}).skip(skipCount).limit(1).exec().then(hitokoto => {
+            if (hitokoto.length) {
+              hitokoto = hitokoto[0].toObject();
+              hitokoto.f = collection.name;
+              return hitokoto;
+            } else {
+              return Promise.reject('集合内容为空')
+            }
+          });
+        }
+      })
+    }
+  })
+}
+
+/**
+ * 跨域获取某一个集合内的hitokoto;
+ */
+exports.corsGetOneRandom = function (lastMagicNumber) {
+
+  return exports.getPublicHitokotoCount().then(count => {
+    let skipCount;
+    if (lastMagicNumber) {
+      skipCount = lastMagicNumber % count;
+    } else {
+      skipCount = Math.floor(Math.random() * count);
+    }
+    return Hitokoto.find({
+      state: 'public'
+    }, {__v: 0}).sort({id: -1}).skip(skipCount).limit(1).exec().then(hitokoto => {
+      if (hitokoto.length) {
+        hitokoto = hitokoto[0];
+        return hitokoto.getMyCollectionName().then(name => {
+          hitokoto = hitokoto.toObject();
+          hitokoto.f = name;
+          return hitokoto;
+        })
+      } else {
+        return Promise.reject('集合内容为空')
+      }
+    });
+
+  });
+
 }

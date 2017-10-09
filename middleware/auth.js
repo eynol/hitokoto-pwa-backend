@@ -6,7 +6,7 @@ const config = require('./auth.config.json');
 const secret = config.secret;
 
 function generateAuthToken() {
-  return crypto.HmacSHA1('you are awesome!Now:' + Date.now(), secret).toString();
+  return crypto.HmacSHA1('you are awesome!Now:' + Date.now(), secret).toString() + crypto.HmacSHA1('youcantseeme' + (Date.now() + Date.now()), secret).toString();
 }
 
 function activeAuth(uid) {
