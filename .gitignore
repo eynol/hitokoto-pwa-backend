@@ -60,3 +60,4 @@ typings/
 .vscode
 mailpush/config.json
 middleware/auth.config.json
+*.hito.secret.config.json

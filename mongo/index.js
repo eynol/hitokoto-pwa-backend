@@ -1,19 +1,40 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
-const config = require('./config.json');
+const config = require('./mongo.hito.secret.config.json');
 const co = require('co');
+const bunyan = require('bunyan');
+const path = require('path');
+
+let logger = bunyan.createLogger({
+  name: 'hitokoto.mongoserver',
+  streams: [
+    {
+      stream: process.stdout,
+      level: bunyan.DEBUG
+    }, {
+      path: path.resolve(__dirname, 'mongo.info.log'),
+      level: bunyan.INFO
+    }, {
+      path: path.resolve(__dirname, 'mongo.warn.log'),
+      level: bunyan.WARN
+    }, {
+      path: path.resolve(__dirname, 'mongo.error.log'),
+      level: bunyan.ERROR
+    }
+  ]
+});
 
 let autoIncrement = require("mongodb-autoincrement");
 autoIncrement.setDefaults({field: 'id'});
-let trace = console.log.bind(console);
+
 mongoose.Promise = global.Promise;
 mongoose.connect(config.db);
 
 let db = mongoose.connection;
-db.on('error', console.error.bind(console, 'connection error:'));
-db.on('open', function (some) {
+db.on('error', logger.error.bind(logger));
+db.on('open', function () {
   // we're connected!
-  console.log('db open!', some)
+  console.log('db open success!')
 });
 
 let GLOBAL_PUBLIC_HITOKOTO_NUMBER = null;
@@ -66,7 +87,7 @@ userSchema.methods.myCollections = function () {
 userSchema.methods.updateCollectionName = function (oldname, newname) {
   return this.model('folder').findOne({owner: this._id, name: oldname}).exec().then(collection => {
     if (!collection) {
-      return Promise.reject('没有这个名字的句集')
+      return Promise.reject({message: '没有这个名字的句集', code: 404})
     }
     collection.name = newname;
     return collection.save()
@@ -160,12 +181,16 @@ var tokenSchema = mongoose.Schema({
   time: Number,
   whatfor: String,
   ua: String,
+  ip: String,
   trust: Boolean
 });
 
 var throttleSchema = mongoose.Schema({
   key: {
     type: Schema.Types.String
+  },
+  time: {
+    type: Schema.Types.Date
   },
   namespace: String
 });
@@ -181,6 +206,58 @@ var Follow = mongoose.model('follow', followSchema);
 var Email = mongoose.model('email', emailPushSchema);
 var Token = mongoose.model('token', tokenSchema);
 var Throttle = mongoose.model('throttle', throttleSchema);
+
+/**
+ *  节流操作
+ *
+ * @param {String} key
+ * @param {number} limit
+ * @param {Date} time
+ * @param {String} namespace
+ * @returns
+ */
+exports.throttle = function (key, limit, time, namespace) {
+  return Throttle.find({
+    key,
+    time: {
+      $gt: time
+    },
+    namespace
+  }).count().then(total => {
+    if (total >= limit) {
+      return Promise.reject('操作过于频繁，请稍后再试。');
+    } else {
+      return Throttle.create({key, namespace, time: new Date()}).then(() => Promise.resolve('' + total));
+    }
+  })
+}
+
+/**
+ * 1分钟节流
+ *
+ * @param {String} key
+ * @param {number} limit
+ * @param {String} namespace
+ * @returns
+ */
+exports.throttleOneMinute = function (key, limit, namespace) {
+  let mm1 = new Date();
+  mm1.setMinutes(mm1.getMinutes() - 1);
+  return exports.throttle(key, limit, mm1, namespace);
+}
+/**
+ * 10分钟内节流
+ *
+ * @param {String} key
+ * @param {number} limit
+ * @param {String} namespace
+ * @returns
+ */
+exports.throttleTenMinute = function (key, limit, namespace) {
+  let mm10 = new Date();
+  mm10.setMinutes(mm10.getMinutes() - 10);
+  return exports.throttle(key, limit, mm10, namespace);
+}
 
 /**
  *  创建新建用户，test为true时只测试用户是否存在，不创建用户
@@ -201,7 +278,7 @@ exports.creatUser = function (user, test) {
       }
     ]
   }).select('username nickname email').exec().then(users => {
-    trace('查找是否有相同用户名', users)
+    logger.debug('查找是否有相同用户名 %o', users)
     if (users.length != 0) {
       let reason = '';
       users.forEach(_user => {
@@ -237,11 +314,11 @@ exports.creatUser = function (user, test) {
  */
 exports.getUserByUid = function (uid) {
   return User.findById(uid).select('username nickname email').exec().then(user => {
-    trace('由uid查询用户', user);
+    logger.debug('由uid查询用户', user);
     if (user) {
       return user;
     } else {
-      return;
+      return Promise.reject('用户不存在');
     }
   })
 };
@@ -265,7 +342,7 @@ exports.getUserByEmail = function (email) {
  */
 exports.exploreUser = function (uid) {
   return User.findById(uid).select('nickname intro photo permited').exec().then(user => {
-    trace('获得用户的基本资料；', user);
+    logger.debug('获得用户的基本资料:%o', user);
     if (user) {
       if (user.permited) {
         return user.myCollections().then(collections => {
@@ -279,10 +356,10 @@ exports.exploreUser = function (uid) {
           return ret;
         })
       } else {
-        return Promise.reject('该用户已被禁用！');
+        return Promise.reject({message: '该用户已被禁用！', code: 403});
       }
     } else {
-      return Promise.reject('无该用户！');
+      return Promise.reject({message: '无该用户！', code: 404});
     }
   })
 };
@@ -321,7 +398,7 @@ exports.updateUserEmail = function (uid, email) {
  */
 exports.updateUserPassword = function (uid, oldpassword, newpassword) {
   return User.findById(uid).select('username password email').exec().then(user => {
-    trace('修改用户密码', user);
+    logger.debug('修改用户密码', user);
     if (user) {
 
       if (user.password == oldpassword) {
@@ -331,7 +408,7 @@ exports.updateUserPassword = function (uid, oldpassword, newpassword) {
         return Promise.reject('原密码错误!');
       }
     } else {
-      return Promise.reject('没有该用户！');
+      return Promise.reject({message: '没有该用户！', code: 404});
     }
   })
 };
@@ -346,7 +423,7 @@ exports.userLogin = function (username, password) {
   return User.findOne({username}).select('_id username password nickname permited').exec().then(doc => {
     if (doc) {
       if (!doc.permited) {
-        return Promise.reject('禁止该用户访问！请联系管理员')
+        return Promise.reject({message: '禁止该用户访问！请联系管理员', code: 403})
       }
       if (doc.password == password) {
         return {uid: doc._id, nickname: doc.nickname};
@@ -373,20 +450,20 @@ exports.userCollections = function (uid) {
 
     if (user) {
       if (!user.permited) {
-        return Promise.reject('禁止访问该用户！请联系管理员')
+        return Promise.reject({message: '禁止该用户访问！请联系管理员', code: 403})
       }
-      console.log('start', Date.now());
+
       return user.myCollections().exec().then(collections => {
         //  得到集合内hitokoto的总数；
         return Promise.all(collections.map(v => v.countAll())).then(countList => {
-          console.log(countList);
+
           return collections.map((collection, index) => {
             collection = collection.toObject();
             collection.count = countList[index];
             return collection;
           })
         }).then(ret => {
-          console.log('end', Date.now());
+
           return ret
         })
       });
@@ -478,10 +555,12 @@ exports.createHitokoto = function (uid, name, hitokoto) {
             $inc: {
               count: 1
             }
-          }).then(() => hitokoto)
+          }).then((coll) => {
+            return hitokoto
+          })
         }, e => {
-          console.log(e);
-          return Promise.reject('创建hitokoto失败！！')
+          logger.info(e, '创建hitokto失败');
+          return Promise.reject({message: '创建hitokoto失败！！', code: 500})
         })
       } else {
         return Hitokoto.create(hitokoto)
@@ -498,25 +577,50 @@ exports.createHitokoto = function (uid, name, hitokoto) {
  * @param {Sting} hid
  * @returns
  */
-exports.updateHitokoto = function (hid, hitokoto) {
+exports.updateHitokoto = function (uid, hid, hitokoto) {
 
-  return Hitokoto.findByIdAndUpdate(hid, hitokoto, {new: false}).exec().then(oldHitokoto => {
-    if (hitokoto.state !== oldHitokoto.state) {
-      console.log('hitokoto状态不相等');
-      return Collection.findByIdAndUpdate(oldHitokoto.fid, {
-        $inc: {
-          count: (hitokoto.state == 'public'
-            ? 1
-            : -1)
-        }
-      }).exec();
-    } else {
-      return
+  return Hitokoto.findOneAndUpdate({
+    _id: hid,
+    creator_id: uid
+  }, hitokoto, {new: false}).exec().then(oldHitokoto => {
+    if (!oldHitokoto) {
+      return Promise.reject('更新失败！')
+    }
+    if (oldHitokoto.state == 'public') {
+      if (hitokoto.state == 'public') {
+        return;
+      } else if (hitokoto.state == 'private' || hitokoto.state == 'reviewing') {
+        return Collection.findByIdAndUpdate(oldHitokoto.fid, {
+          $inc: {
+            count: -1
+          }
+        }).exec();
+      }
+    } else if (oldHitokoto.state == 'private') {
+      if (hitokoto.state == 'public') {
+        return Collection.findByIdAndUpdate(oldHitokoto.fid, {
+          $inc: {
+            count: 1
+          }
+        }).exec();
+      } else if (hitokoto.state == 'private' || hitokoto.state == 'reviewing') {
+        return;
+      }
+    } else if (oldHitokoto.state == 'reviewing') {
+      if (hitokoto.state == 'public') {
+        /*return Collection.findByIdAndUpdate(oldHitokoto.fid, {
+          $inc: {
+            count: 1
+          }
+        }).exec();*/
+        return Promise.reject('用户无此权限');
+      } else if (hitokoto.state == 'private' || hitokoto.state == 'reviewing') {
+        return;
+      }
     }
 
-  }, e => {
-    console.log(e);
-    return Promise.reject('修改hitokoto失败！！')
+    return Promise.reject('修改失败,你不按套路出牌。');
+
   })
 }
 
@@ -527,11 +631,11 @@ exports.updateHitokoto = function (hid, hitokoto) {
  * @param {Sting} hid
  * @returns
  */
-exports.deleteHitokoto = function (hid) {
+exports.deleteHitokoto = function (uid, hid) {
 
-  return Hitokoto.findByIdAndRemove(hid).exec().then(hitokoto => {
+  return Hitokoto.findOneAndRemove({_id: hid, creator_id: uid}).exec().then(hitokoto => {
     if (!hitokoto) {
-      return Promise.reject('找不到对应的句子！')
+      return Promise.reject({message: '找不到对应的句子！', code: 404})
     }
     if (hitokoto.state == 'public') {
       --GLOBAL_PUBLIC_HITOKOTO_NUMBER;
@@ -545,7 +649,7 @@ exports.deleteHitokoto = function (hid) {
       return hitokoto;
     }
   }, e => {
-    console.log(e);
+    logger.error(e, '删除hitokoto失败！');
     return Promise.reject('删除hitokoto失败！！')
   })
 }
@@ -559,9 +663,9 @@ exports.searchAllPublicHitokotos = function (page, perpage) {
     _id: 0,
     _v: 0
   }).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
-    console.log(hitokotos);
+    logger.debug(hitokotos, '所有公开的用户');
     return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
-      console.log(nameList);
+      logger.debug(nameList, '名字');
       return hitokotos.map((hitokoto, index) => {
         hitokoto = hitokoto.toObject();
         hitokoto.collection = nameList[index];
@@ -576,12 +680,14 @@ exports.searchAllPublicHitokotos = function (page, perpage) {
  *
  * @param {String} email
  * @param {String} code - 邮箱验证码
+ * @param {String} whatfor - 用于做什么
+ * @param {String} token - 口令
  * @returns {Promise<Document>}
  */
 exports.doEmailVerify = function (email, code, whatfor, token) {
-  // let LIMIT_10M = 10*60*1000;
-  let LIMIT_10M = 600000;
-  let _10M_Before = Date.now() - LIMIT_10M;
+  // let LIMIT_10M = 30*60*1000;
+  let LIMIT_30M = 1800000;
+  let _10M_Before = Date.now() - LIMIT_30M;
   let query = {
     email: email,
     code: code.toUpperCase(),
@@ -608,7 +714,7 @@ exports.doEmailVerify = function (email, code, whatfor, token) {
     } else {
       latest.wasted = true;
       return latest.save().catch(reason => {
-        trace('保存修改的验证码失败', reason);
+        logger.debug('保存修改的验证码失败', reason);
         return Promise.reject('保存验证码失败！');
       })
 
@@ -616,6 +722,26 @@ exports.doEmailVerify = function (email, code, whatfor, token) {
   })
 }
 
+exports.makeSureUserEmailBeforeUpdate = function (uid, email) {
+  let t = new Date();
+  t.setMinutes(t.getMinutes() - 30);
+
+  return Email.findOne({
+    email: email,
+    wasted: true,
+    time: {
+      $gt: t.getTime()
+    },
+    whatfor: 'oldemailcode',
+    token: uid
+  }).exec().then(email => {
+    if (email) {
+      return;
+    } else {
+      return Promise.reject('用户验证失败！')
+    }
+  })
+}
 /**
  *  存储邮箱和邮箱验证码，返回验证码
  *
@@ -642,7 +768,7 @@ exports.storeEmailVerify = function (email, code, whatfor, token) {
  *
  * @param {String} {String : userAgent, userId, token, time}
  */
-exports.authActive = function ({ua, uid, token}) {
+exports.authActive = function ({ua, uid, token, ip}) {
   // let _30DAYS = 30 * 24 * 60 * 60 * 1000;
   let _30DAYS = 2592000000;
   return Token.create({
@@ -650,9 +776,10 @@ exports.authActive = function ({ua, uid, token}) {
     uid,
     time: Date.now() + _30DAYS,
     ua,
+    ip,
     trust: true
   }).catch(e => {
-    trace('save token', e)
+    logger.debug('save token', e)
     return Promise.reject('创建失败！')
   })
 }
@@ -664,19 +791,21 @@ exports.authActive = function ({ua, uid, token}) {
  * @returns
  */
 exports.authCheck = function ({ua, token}) {
-  return Token.findOne({token, ua, trust: true}).exec().then(token => {
+  return Token.findOne({token, ua, trust: true}).sort({time: -1}).exec().then(token => {
     if (token) {
       let expireTime = token.time;
       if (Date.now() < expireTime) {
         return {uid: token.uid, code: 200}
       } else {
-        return {uid: token.uid, message: '授权过期，请重新登录', code: 301}
+        logger.warn({message: '用户授权已过期', uid});
+        return {uid: token.uid, message: '授权过期，请重新登录', code: 403}
       }
+    } else {
+      return {message: '授权失败', code: 403}
     }
-    return Promise.reject('授权失败')
   }).catch(e => {
-    trace('save token', e)
-    return Promise.reject('授权失败')
+    logger.debug('save token', e)
+    return Promise.reject(e);
   })
 }
 
@@ -703,7 +832,7 @@ exports.authTerminate = function ({ua, token}) {
       return Promise.reject('授权失败')
     }
   }).catch(e => {
-    trace('save token', e)
+    logger.debug('save token', e)
     return Promise.reject('撤销失败')
   })
 }
@@ -729,15 +858,15 @@ exports.getPublicHitokotoCount = function () {
 exports.corsUserCollection = function (username, collectionName, lastMagicNumber) {
   return User.findOne({nickname: username}).exec().then(user => {
     if (!user) {
-      return Promise.reject('用户不存在！')
+      return Promise.reject({message: '用户不存在！', code: 404})
     } else if (!user.permited) {
-      return Promise.reject('用户被封禁！')
+      return Promise.reject({message: '用户被封禁！', code: 403})
     } else {
       return Collection.findOne({owner: user._id, name: collectionName}).exec().then(collection => {
         if (!collection) {
-          return Promise.reject('句集不存在！')
+          return Promise.reject({message: '句集不存在！', code: 404})
         } else if (collection.state !== 'public') {
-          return Promise.reject('该句集不公开，无法获取！')
+          return Promise.reject({message: '该句集不公开，无法获取！', code: 403})
         } else {
           let count = collection.count;
           let skipCount;
@@ -756,13 +885,46 @@ exports.corsUserCollection = function (username, collectionName, lastMagicNumber
               hitokoto.f = collection.name;
               return hitokoto;
             } else {
-              return Promise.reject('集合内容为空')
+              return Promise.reject({message: '集合内容为空', code: 404})
             }
           });
         }
       })
     }
   })
+}
+
+/**
+ * 跨域获取某一个集合内的hitokoto;
+ */
+exports.noCorsUserCollection = function (uid, fid, lastMagicNumber) {
+  return Hitokoto.count({creator_id: uid, fid: fid}).exec().then(count => {
+
+    let skipCount;
+    if (lastMagicNumber) {
+      skipCount = lastMagicNumber % count;
+    } else {
+      skipCount = Math.floor(Math.random() * count);
+    }
+    return Hitokoto.find({
+      creator_id: uid,
+      fid: fid
+    }, {__v: 0}).skip(skipCount).limit(1).exec().then(hitokoto => {
+      if (hitokoto.length) {
+        hitokoto = hitokoto[0].toObject();
+        return Collection.findById(fid, {name: 1}).exec().then(collection => {
+
+          hitokoto.f = collection.name;
+          return hitokoto;
+
+        })
+      } else {
+        return Promise.reject({message: '集合内容为空', code: 404})
+      }
+    });
+
+  })
+
 }
 
 /**
@@ -788,10 +950,9 @@ exports.corsGetOneRandom = function (lastMagicNumber) {
           return hitokoto;
         })
       } else {
-        return Promise.reject('集合内容为空')
+        return Promise.reject({message: '集合内容为空', code: 404})
       }
     });
-
   });
 
 }

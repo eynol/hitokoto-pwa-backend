@@ -1,6 +1,8 @@
 'use strict';
 const nodemailer = require('nodemailer');
-const config = require('./config.json');
+const config = require('./email.hito.secret.config.json');
+
+const templates = require('./email-templates');
 
 // create reusable transporter object using the default SMTP transport
 let transporter = nodemailer.createTransport({
@@ -17,11 +19,11 @@ exports.sendVerifyCodeTo = function (email, code, whatfor) {
 
       // setup email data with unicode symbols
       let mailOptions = {
-        from: '"Heitaov" <mail@heitaov.cn>', // sender address
+        from: '"一言" <mail@heitaov.cn>', // sender address
         to: email, // list of receivers
-        subject: `[一言]注册Hitokoto的验证码为[${code}]`, // Subject line
-        text: `验证码: ${code} \n此验证码10分钟内有效。\n该邮件由服务器自动发送，请勿回复。若非您本人亲自操作，请忽略本邮件。`, // plain text body
-        html: `<b>验证码:${code}</b><br/><p>此验证码10分钟内有效。该邮件由服务器自动发送，请勿回复。</p>` // html body
+        subject: `${code},这是注册一言的验证码`, // Subject line
+        text: templates.TEXT01('你注册一言的验证码为：', code, '此验证码30分钟内有效。若非您本人亲自操作，请忽略本邮件。'), // plain text body
+        html: templates.HTML01('你注册一言的验证码为：' + code, '你注册一言的验证码为：', code, '此验证码30分钟内有效。若非您本人亲自操作，请忽略本邮件。') // html body
       };
 
       transporter.sendMail(mailOptions, (error, info) => {
@@ -37,11 +39,11 @@ exports.sendVerifyCodeTo = function (email, code, whatfor) {
 
       // setup email data with unicode symbols
       let mailOptions = {
-        from: '"Heitaov" <mail@heitaov.cn>', // sender address
+        from: '"一言" <mail@heitaov.cn>', // sender address
         to: email, // list of receivers
-        subject: `[一言]有人正在一言修改邮箱，验证码为[${code}]`, // Subject line
-        text: `验证码: ${code} \n此验证码10分钟内有效。\n该邮件由服务器自动发送，请勿回复。若非您本人亲自操作，请忽略本邮件。`, // plain text body
-        html: `<b>验证码:${code}</b><br/><p>此验证码10分钟内有效。该邮件由服务器自动发送，请勿回复。</p>` // html body
+        subject: `${code},这是在一言修改绑定邮箱的验证码`, // Subject line
+        text: templates.TEXT01('你在一言修改绑定邮箱的验证码为：', code, '此验证码30分钟内有效。若非您本人亲自操作，请忽略本邮件。'), // plain text body
+        html: templates.HTML01('修改绑定邮箱', '有人正在一言修改绑定邮箱，验证码为：', code, '此验证码30分钟内有效。若非您本人亲自操作，请忽略本邮件。') // html body
       };
 
       transporter.sendMail(mailOptions, (error, info) => {
@@ -57,11 +59,11 @@ exports.sendVerifyCodeTo = function (email, code, whatfor) {
 
       // setup email data with unicode symbols
       let mailOptions = {
-        from: '"Heitaov" <mail@heitaov.cn>', // sender address
+        from: '"一言" <mail@heitaov.cn>', // sender address
         to: email, // list of receivers
-        subject: `[一言]有人正在一言[绑定新的邮箱]，验证码为[${code}]`, // Subject line
-        text: `验证码: ${code} \n此验证码10分钟内有效。\n该邮件由服务器自动发送，请勿回复。若非您本人亲自操作，请忽略本邮件。`, // plain text body
-        html: `<b>验证码:${code}</b><br/><p>此验证码10分钟内有效。该邮件由服务器自动发送，请勿回复。</p>` // html body
+        subject: `${code},这是你在一言绑定新邮箱的验证码`, // Subject line
+        text: templates.TEXT01('你在一言绑定新邮箱的验证码为：', code, '此验证码30分钟内有效。若非您本人亲自操作，请忽略本邮件。'), // plain text body
+        html: templates.HTML01('绑定新邮箱', '你在一言绑定新邮箱的验证码为：：', code, '此验证码30分钟内有效。若非您本人亲自操作，请忽略本邮件。') // html body
       };
 
       transporter.sendMail(mailOptions, (error, info) => {
@@ -82,11 +84,11 @@ exports.notifyChangePassword = function (email) {
 
     // setup email data with unicode symbols
     let mailOptions = {
-      from: '"Heitaov" <mail@heitaov.cn>', // sender address
+      from: '"一言" <mail@heitaov.cn>', // sender address
       to: email, // list of receivers
-      subject: `[一言]有人修改了您的密码，若非本人操作，请及时联系系统管理员。`, // Subject line
-      text: `操作时间：${new Date().toLocaleString()} 。若非本人操作，请及时联系系统管理员。\n该邮件由服务器自动发送，请勿回复。若非您本人亲自操作，请忽略本邮件。`, // plain text body
-      html: `[一言]有人修改了您的密码，操作时间是 ${new Date().toLocaleString()}。该邮件由服务器自动发送，请勿回复。</p>` // html body
+      subject: `一言-有人修改了您的密码，若非本人操作，请及时联系系统管理员。`, // Subject line
+      text: templates.TEXT01('有人修改了您在一言网的密码，时刻是：', new Date().toLocaleString(), '若不是您本人亲自操作，请及时联系管理员。'), // plain text body
+      html: templates.HTML01('有人修改了您在一言网的密码', '有人修改了您在一言网的密码，时刻是：', new Date().toLocaleString(), '若不是您本人亲自操作，请及时联系管理员。') // html body
     };
 
     transporter.sendMail(mailOptions, (error, info) => {

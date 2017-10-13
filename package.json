@@ -8,6 +8,7 @@
     "start": "node app.js"
   },
   "dependencies": {
+    "bunyan": "^1.8.12",
     "co": "^4.6.0",
     "crypto-js": "^3.1.9-1",
     "lodash": "^4.17.4",

@@ -1,6 +1,9 @@
 const restify = require('restify');
 const corsMiddleware = require('restify-cors-middleware')
 const validator = require('validator');
+const bunyan = require('bunyan');
+const path = require('path');
+const errs = require('restify-errors');
 
 const mongoServer = require('./mongo');
 const emailServer = require('./mailpush/index.js');
@@ -14,12 +17,31 @@ const cors = corsMiddleware({origins: ['*'], allowHeaders: ['API-Token'], expose
 
 const whitelistapi = [(/^\/cors/)];
 const CURRENTHOST = /^http(s)?:\/\/localhost:8080/;
+const PUBLIC_HITO_NEED_REVIEW = false;
 
-const server = restify.createServer({name: 'hitokoto', version: '1.0.0'});
+let logger = bunyan.createLogger({
+  name: 'hitokoto',
+  streams: [
+    {
+      stream: process.stdout,
+      level: bunyan.DEBUG
+    }, {
+      path: path.resolve(__dirname, 'info.log'),
+      level: bunyan.INFO
+    }, {
+      path: path.resolve(__dirname, 'warn.log'),
+      level: bunyan.WARN
+    }, {
+      path: path.resolve(__dirname, 'error.log'),
+      level: bunyan.ERROR
+    }
+  ]
+});
 
-server.pre((req, res, next) => {
-  console.log(req.method, req.path(), req.url);
-  console.log(req.connection.remotePort);
+const server = restify.createServer({name: 'hitokoto', version: '1.0.0', log: logger});
+
+//  跨域 url 白名单
+server.pre(function corsWhiteList(req, res, next) {
   if (req.method !== 'OPTIONS') {
     if (!req.headers['origin'] || CURRENTHOST.test(req.headers['origin'])) {
       return next();
@@ -41,16 +63,70 @@ server.pre((req, res, next) => {
   }
 });
 server.pre(cors.preflight);
+
 server.use(cors.actual);
+server.use(restify.plugins.throttle({
+  burst: 100,
+  rate: 50,
+  ip: true,
+  overrides: {
+    '127.0.0.1': {
+      rate: 0, // unlimited
+      burst: 0
+    }
+  }
+}));
+
+//  无需授权  白名单
+server.use(authMiddleware([
+  (/^\/$/),
+  (/^\/debug/),
+  (/^\/cors/),
+  (/^\/api\/login/),
+  (/^\/api\/regist/),
+  (/^\/api\/explore/)
+]));
 server.use(restify.plugins.acceptParser(server.acceptable));
+server.use(restify.plugins.gzipResponse());
 server.use(restify.plugins.queryParser());
 server.use(restify.plugins.bodyParser());
-server.use(authMiddleware())
-// $regist(server);
+server.use((function CommonPromiseException() {
+  function pRejectHandler(next, reason) {
+    if (typeof reason == 'string') {
+      this.charSet('utf-8');
+      this.send(new errs.BadRequestError(reason))
+      return next(false);
+    } else if (typeof reason == 'object' && typeof reason.message == 'string' && typeof reason.code == 404) {
+      this.charSet('utf-8');
+      this.send(new errs.NotFoundError(reason.message))
+      return next(false);
+    } else if (typeof reason == 'object' && typeof reason.message == 'string' && typeof reason.code == 403) {
+      this.charSet('utf-8');
+      this.send(new errs.ForbiddenError(reason.message))
+      return next(false);
+    } else {
+      return next(new errs.InternalServerError(reason));
+    }
+  }
+  return function pRejectCommonHandler(req, res, next) {
 
+    res.rejectedCommon = (nextRoute) => pRejectHandler.bind(res, nextRoute);
+    return next();
+  }
+})());
+
+server.use(function broadMessagePicker(req, res, next) {
+  next()
+})
+
+// $regist(server);
 server.get('/', function (req, res, next) {
-  res.send(appUtil.generateCode4());
-  return next();
+
+  mongoServer.throttleOneMinute('kkk', 40).then((c) => {
+    res.send(c);
+    return next(false);
+  }, res.rejectedCommon(next));
+
 });
 
 server.get('/debug', function (req, res, next) {
@@ -58,21 +134,21 @@ server.get('/debug', function (req, res, next) {
   return next();
 });
 
-server.get('/test/email/:email', function (req, res, next) {
+server.get('/debug/email/:email', function (req, res, next) {
   let {email} = req.params
   let code = appUtil.generateCode4();
-  mongoServer.storeEmailVerify(email, code).then(code => {
+  emailServer.sendVerifyCodeTo(email, code, 'newemailcode').then(code => {
     res.send(code);
-    next();
-  })
+    next()
+  }).catch(res.rejectedCommon(next));
 });
-server.get('/test/email/:email/:code', function (req, res, next) {
+server.get('/debug/email/:email/:code', function (req, res, next) {
   let {email, code} = req.params
 
   mongoServer.doEmailVerify(email, code).then(e => {
     res.send(e)
     next()
-  })
+  }, res.rejectedCommon(next))
 });
 
 server.get('/api', function (req, res, next) {
@@ -87,14 +163,14 @@ server.get('/api', function (req, res, next) {
 server.get('/cors/:username/:collection', function (req, res, next) {
   let username = req.params.username,
     collectionName = req.params.collection;
-  let {jsonp, count} = req.query;
-
+  let {jsonp, seed} = req.query;
+  seed = Number(seed);
   username = validator.trim(username);
   collectionName = validator.trim(collectionName);
 
   res.noCache();
-  res.charSet('utf-8');
-  mongoServer.corsUserCollection(username, collectionName).then(hitokoto => {
+
+  mongoServer.corsUserCollection(username, collectionName, seed).then(hitokoto => {
     if (jsonp) {
       jsonp = validator.toString(jsonp);
       res.header('Content-Type', 'application/javascript; charset=UTF-8');
@@ -105,11 +181,42 @@ server.get('/cors/:username/:collection', function (req, res, next) {
       return next();
 
     }
-  }).catch(e => {
-    res.send(500, {message: e});
-    return next(false);
-  });
+  }).catch(res.rejectedCommon(next));
 });
+
+/**
+ * 获取一条hitokto    所有的 包括公开的和未公开的。
+ */
+
+server.get('/api/sources/:uid/:fid', function (req, res, next) {
+
+  let uid = req.params.uid,
+    fid = req.params.fid;
+  uid = validator.trim(uid);
+  fid = validator.trim(fid);
+
+  let {jsonp, seed} = req.query;
+  seed = Number(seed);
+  res.noCache();
+  res.charSet('utf8');
+
+  if (uid !== req.userid.toString()) {
+    res.send(new errs.ForbiddenError('禁止通过该私密接口访问其他人的来源，请使用CORS来源。'))
+    return next(false);
+  }
+  mongoServer.noCorsUserCollection(uid, fid, seed).then(hitokoto => {
+    if (jsonp) {
+      jsonp = validator.toString(jsonp);
+      res.header('Content-Type', 'application/javascript; charset=UTF-8');
+      res.send(200, jsonp + '(' + JSON.stringify(hitokoto) + ')');
+      return next();
+    } else {
+      res.send(200, hitokoto);
+      return next();
+    }
+  }).catch(res.rejectedCommon(next));
+});
+
 server.get('/cors', function (req, res, next) {
   let {jsonp, count} = req.query;
 
@@ -126,10 +233,7 @@ server.get('/cors', function (req, res, next) {
       return next();
 
     }
-  }).catch(e => {
-    res.send(500, {message: e});
-    return next(false);
-  });
+  }).catch(res.rejectedCommon(next));
 });
 
 /**
@@ -163,7 +267,9 @@ server.post('/api/regist', function (req, res, next) {
   let test = !code;
 
   if (test) {
-    mongoServer.creatUser({
+    mongoServer.throttleOneMinute(username + password + email + nickname, 10).catch(e => {
+      return Promise.reject('一分钟内不能超过10次')
+    }).then(() => mongoServer.creatUser({
       username,
       password,
       email,
@@ -174,19 +280,17 @@ server.post('/api/regist', function (req, res, next) {
       return emailServer.sendVerifyCodeTo(email, code, 'regist')
     }).then((detail) => {
       if (detail.accepted.length != 1) {
-        res.send({accepted: detail.accepted.length, rejected: detail.rejected.length, err: '邮件似乎发送失败'})
+        res.send(500, {
+          accepted: detail.accepted.length,
+          rejected: detail.rejected.length,
+          message: '验证邮件发送失败'
+        })
         next(false);
       } else {
-        res.send({message: '邮件发送成功！'})
+        res.send({message: '验证邮件发送成功！'})
         next();
       }
-    }).catch(e => {
-      trace('send email catch', e)
-      res.send({
-        err: '执行错误：' + e
-      });
-      next(false)
-    });
+    })).catch(res.rejectedCommon(next));
 
   } else {
     mongoServer.doEmailVerify(email, code, 'regist').then(() => mongoServer.creatUser({
@@ -198,16 +302,10 @@ server.post('/api/regist', function (req, res, next) {
       let uid = user._id;
       trace('创建用户成功', user);
       return req.hitoAuthActive(uid).then(token => {
-        res.send({token, nickname});
+        res.send({token, nickname, message: '注册成功！欢迎成为网站的一员！\n请遵守国家的相关法律，不发布任何有害内容。\n\n注意：这里不欢迎没有创意的广告！'});
         next()
       })
-    }).catch(e => {
-      res.send({
-        where: 'newUser',
-        err: '执行错误：' + e
-      });
-      next(false)
-    })
+    }).catch(res.rejectedCommon(next))
   }
 });
 
@@ -217,24 +315,29 @@ server.post('/api/login', function (req, res, next) {
   username = validator.trim(username);
   password = validator.trim(password);
 
-  mongoServer.userLogin(username, password).then(({uid, nickname}) => {
+  mongoServer.throttleTenMinute(username, 30).catch(e => {
+    return Promise.reject('10分钟内登陆次数不能超过30次！')
+  }).then(() => mongoServer.userLogin(username, password)).then(({uid, nickname}) => {
     return req.hitoAuthActive(uid).then(token => {
-      res.send({token: token, nickname: nickname});
+      res.send({token: token, nickname: nickname, message: '登录成功！'});
       next()
     })
-  }).catch(e => {
-    res.send({err: e});
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 });
 
+/**
+ * 修改密码
+ */
 server.post('/api/password', function (req, res, next) {
 
   let {newpass, oldpass} = req.body;
   newpass = validator.trim(newpass);
   oldpass = validator.trim(oldpass);
 
-  req.hitoAuthCheck().then(ret => mongoServer.updateUserPassword(ret.uid, oldpass, newpass)).then(user => {
+  mongoServer.throttleTenMinute(req.userid + 'password', 30).catch(e => {
+    req.log.warn('用户多次尝试修改密码', req.uid)
+    return Promise.reject('10分钟内修改密码次数不能超过30次！')
+  }).then(() => mongoServer.updateUserPassword(req.userid, oldpass, newpass)).then(user => {
     return emailServer.notifyChangePassword(user.email)
   }).then(detail => {
     if (detail.accepted.length != 1) {} else {
@@ -242,61 +345,55 @@ server.post('/api/password', function (req, res, next) {
     }
     res.send({message: '修改密码成功！'});
     next();
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
+
+/**
+ * 个人资料页 得到邮箱号码
+ */
 server.get('/api/useremail', function (req, res, next) {
 
-  req.hitoAuthCheck().then(ret => mongoServer.getUserByUid(ret.uid)).then(user => {
+  mongoServer.getUserByUid(req.userid).then(user => {
     trace('得到用户邮箱', user);
     return appUtil.hideEmail(user.email);
   }).then(email => {
     res.send({email})
     next();
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 })
 
 /**
  * get 是发送验证码给旧邮箱，post是验证旧验证码
  */
 server.get('/api/oldemailcode', function (req, res, next) {
+  mongoServer.throttleOneMinute(req.userid + 'oldEmailCode', 1).catch(e => {
 
-  req.hitoAuthCheck().then(ret => {
-    return mongoServer.getUserByUid(ret.uid).then(user => {
-      console.log(user);
-      let email = user.email;
+    return Promise.reject('一分钟只能发送一次验证码')
 
-      return mongoServer.storeEmailVerify(email, appUtil.generateCode4(), 'oldemailcode', ret.uid).then(code => {
-        return emailServer.sendVerifyCodeTo(email, code, 'oldemailcode')
-      })
+  }).then(() => mongoServer.getUserByUid(req.userid)).then(user => {
+
+    req.log.debug(user);
+
+    let email = user.email;
+
+    return mongoServer.storeEmailVerify(email, appUtil.generateCode4(), 'oldemailcode', req.userid).then(code => {
+      return emailServer.sendVerifyCodeTo(email, code, 'oldemailcode')
     })
+
   }).then(detail => {
     if (detail.accepted.length != 1) {
-      res.send({accepted: detail.accepted.length, rejected: detail.rejected.length, err: '邮件似乎发送失败'})
+      res.send(500, {
+        accepted: detail.accepted.length,
+        rejected: detail.rejected.length,
+        message: '验证邮件似乎发送失败'
+      })
       next(false);
     } else {
-      res.send({message: '邮件发送成功！'})
+      res.send({message: '验证邮件已发送至您的旧邮箱内！请输入您收到的验证码'})
       next();
     }
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 })
 
@@ -307,23 +404,16 @@ server.post('/api/oldemailcode', function (req, res, next) {
 
   let {code} = req.body;
   code = validator.trim(code);
-
-  req.hitoAuthCheck().then(ret => {
-    return mongoServer.getUserByUid(ret.uid).then(user => {
-      console.log(user);
-      let email = user.email;
-      return mongoServer.doEmailVerify(email, code, 'oldemailcode', ret.uid)
-    })
+  mongoServer.throttleTenMinute(req.userid + 'verifyoldemail', 30).catch(e => {
+    return Promise.reject('操作过于频繁！')
+  }).then(() => mongoServer.getUserByUid(req.userid)).then(user => {
+    req.log.debug(user);
+    let email = user.email;
+    return mongoServer.doEmailVerify(email, code, 'oldemailcode', req.userid)
   }).then(() => {
-    res.send({message: "验证成功！"});
+    res.send({message: "验证成功！请输入新的邮箱。"});
     next()
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 })
 
@@ -336,33 +426,30 @@ server.get('/api/newemailcode', function (req, res, next) {
   email = validator.trim(email);
 
   if (validator.isEmail(email)) {
-    req.hitoAuthCheck().then(ret => {
-      return mongoServer.getUserByEmail(email).then(user => {
-        if (user) {
-          return Promise.reject('该邮箱已存在用户');
-        } else {
-          return mongoServer.storeEmailVerify(email, appUtil.generateCode4(), 'newemailcode', ret.uid).then(code => {
-            return emailServer.sendVerifyCodeTo(email, code, 'newemailcode')
-          })
-        }
-      })
+    mongoServer.throttleOneMinute(email, 1).then(() => mongoServer.getUserByEmail(email)).then(user => {
+      if (user) {
+        return Promise.reject('该邮箱已存在用户');
+      } else {
+        return mongoServer.storeEmailVerify(email, appUtil.generateCode4(), 'newemailcode', req.userid).then(code => {
+          return emailServer.sendVerifyCodeTo(email, code, 'newemailcode')
+        })
+      }
     }).then(detail => {
       if (detail.accepted.length != 1) {
-        res.send({accepted: detail.accepted.length, rejected: detail.rejected.length, err: '邮件似乎发送失败'})
+        res.send(500, {
+          accepted: detail.accepted.length,
+          rejected: detail.rejected.length,
+          message: '邮件似乎发送失败'
+        })
         next(false);
       } else {
-        res.send({message: '邮件发送成功！'})
+        res.send({message: '成功发送新的验证码至您的新邮箱！请输入您收到的新验证码！'})
         next();
       }
-    }).catch(e => {
-      res.send({
-        code: e.code,
-        err: e.message || e
-      });
-      next()
-    })
+    }).catch(res.rejectedCommon(next))
   } else {
-    throw new Error('邮箱格式不正确！');
+    res.send(new errs.InvalidArgumentError('邮箱格式不正确！'));
+    next(false);
   }
 
 })
@@ -377,111 +464,97 @@ server.post('/api/newemailcode', function (req, res, next) {
   code = validator.trim(code);
 
   if (validator.isEmail(email)) {
-    req.hitoAuthCheck().then(ret => {
-      return mongoServer.getUserByUid(ret.uid).then(user => {
-        return mongoServer.doEmailVerify(email, code, 'newemailcode', ret.uid).then(() => {
-          return mongoServer.updateUserEmail(ret.uid, email);
-        })
+    mongoServer.throttleTenMinute(email + 'veryfyNewEmail', 30).then(() => mongoServer.getUserByUid(req.userid)).then(user => {
+      return mongoServer.doEmailVerify(email, code, 'newemailcode', req.userid).then(() => {
+        //确保上一条验证短信是成功的
+        return mongoServer.makeSureUserEmailBeforeUpdate(req.userid, user.email)
+      }).then(() => {
+        return mongoServer.updateUserEmail(req.userid, email);
       })
     }).then(() => {
-      res.send({message: "验证成功！"});
+      res.send({message: "绑定新邮箱成功！"});
       next()
-    }).catch(e => {
-      res.send({
-        code: e.code,
-        err: e.message || e
-      });
-      next()
-    })
+    }).catch(res.rejectedCommon(next))
   } else {
-    throw new Error('邮箱格式不正确！');
+    next(new errs.InternalError('邮箱格式不正确！'));
   }
 });
+
+/**
+ * 获取自己所有的句集
+ */
 server.get('/api/collections', function (req, res, next) {
 
-  req.hitoAuthCheck().then(ret => mongoServer.userCollections(ret.uid)).then(collections => {
-    console.log(collections);
+  mongoServer.userCollections(req.userid).then(collections => {
+    req.log.debug(collections);
     res.send({collections});
     next()
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
+
+/**
+ * 新建句集
+ */
 server.put('/api/collections', function (req, res, next) {
 
   let {name} = req.body;
   name = validator.trim(name);
 
   if (name === '默认句集') {
-    res.send({err: '默认句集无法添加！'});
+    res.send(400, {message: '默认句集无法添加！'});
     next(false)
     return;
   }
-  req.hitoAuthCheck().then(ret => mongoServer.newUserCollection(ret.uid, name).then(() => mongoServer.userCollections(ret.uid))).then(collections => {
-    res.send({collections});
+  mongoServer.newUserCollection(req.userid, name).then(() => mongoServer.userCollections(req.userid)).then(collections => {
+    res.send({collections, message: '添加成功！'});
     next()
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
+
+/**
+ * 重命名句集
+ */
 server.post('/api/collections', function (req, res, next) {
 
   let {oldname, newname} = req.body;
   oldname = validator.trim(oldname);
   newname = validator.trim(newname);
   if (oldname === newname) {
-    res.send({err: '修改的名称相等！无需修改！'});
+    res.send(400, {message: '修改的名称相等！无需修改！'});
     next(false)
     return;
   }
-  req.hitoAuthCheck().then(ret => mongoServer.updateUserCollectionName(ret.uid, oldname, newname).then(() => mongoServer.userCollections(ret.uid))).then(after => {
-    res.send({collections: after});
+  mongoServer.updateUserCollectionName(req.userid, oldname, newname).then(() => mongoServer.userCollections(req.userid)).then(after => {
+    res.send({collections: after, message: '重命名成功！'});
     next()
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
+/**
+ * 删除句集
+ */
 server.del('/api/collections', function (req, res, next) {
 
   let {name} = req.body;
   name = validator.trim(name);
 
   if (name === '默认句集') {
-    res.send({err: '默认句集无法删除！'});
+    res.send(400, {message: '默认句集无法删除！'});
     next(false)
     return;
   }
-  req.hitoAuthCheck().then(ret => mongoServer.deleteUserCollection(ret.uid, name).then(theone => {
+  mongoServer.deleteUserCollection(req.userid, name).then(theone => {
     if (!theone) {
       res.send(404, {message: '未找到该句集。可能已经被删除了'});
     } else {
-      return mongoServer.userCollections(ret.uid).then(collections => {
-        res.send({collections});
+      return mongoServer.userCollections(req.userid).then(collections => {
+        res.send({collections, message: '删除成功'});
         next()
       })
     }
-  })).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 })
 
@@ -508,7 +581,7 @@ server.get('/api/collections/:name', function (req, res, next) {
     perpage = 10;
   }
 
-  let uid;
+  let uid = req.userid;
   function getAll(page, perpage) {
     return Promise.all([
       mongoServer.userCollections(uid),
@@ -522,7 +595,7 @@ server.get('/api/collections/:name', function (req, res, next) {
       count = target.count,
       totalPage = Math.ceil(count / perpage);
 
-    console.log(count, totalPage);
+    req.log.debug(count, totalPage);
     if (page > 0 && totalPage > 0 && totalPage < page) {
       return getAll(--page, perpage).then(selectResult);
     } else {
@@ -530,51 +603,54 @@ server.get('/api/collections/:name', function (req, res, next) {
     }
   }
 
-  req.hitoAuthCheck().then(ret => {
-    uid = ret.uid;
-  }).then(() => getAll(page, perpage)).then(selectResult).then(result => {
+  getAll(page, perpage).then(selectResult).then(result => {
     res.send(result);
     next()
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
+
+/**
+ * 添加句子
+ */
 server.put('/api/collections/:name', function (req, res, next) {
 
   let name = req.params.name;
   name = validator.trim(name);
 
-  let {hitokoto, source, author, category} = req.body;
+  let {hitokoto, source, author, category, state} = req.body;
   hitokoto = validator.trim(hitokoto);
   source = validator.trim(source);
   author = validator.trim(author);
   category = validator.trim(category);
+  state = Boolean(state);
 
-  req.hitoAuthCheck().then(ret => {
-    return mongoServer.createHitokoto(ret.uid, name, {
-      id: 1,
-      source,
-      author,
-      category,
-      hitokoto,
-      creator_id: ret.uid,
-      state: 'public'
-    })
+  if (PUBLIC_HITO_NEED_REVIEW) {
+    state = state
+      ? 'private'
+      : 'public';
+  } else {
+    state = state
+      ? 'private'
+      : 'reviewing'
+  }
+  mongoServer.createHitokoto(req.userid, name, {
+    id: 1,
+    source,
+    author,
+    category,
+    hitokoto,
+    creator_id: req.userid,
+    state
   }).then(hitokoto => {
-    res.send({hitokoto: hitokoto});
-    next()
-  }).catch(e => {
     res.send({
-      code: e.code,
-      err: e.message || e
+      hitokoto: hitokoto,
+      message: state == 'reviewing'
+        ? '新增成功！'
+        : '新增成功！请等待管理员审核!'
     });
     next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
 
@@ -586,7 +662,14 @@ server.post('/api/collections/:name', function (req, res, next) {
   let name = req.params.name;
   name = validator.trim(name);
 
-  let {_id, hitokoto, author, source, category} = req.body;
+  let {
+    _id,
+    hitokoto,
+    author,
+    source,
+    category,
+    state
+  } = req.body;
 
   _id = validator.trim(_id);
 
@@ -594,19 +677,27 @@ server.post('/api/collections/:name', function (req, res, next) {
   source = validator.trim(source);
   author = validator.trim(author);
   category = validator.trim(category);
+  state = Boolean(state);
 
-  req.hitoAuthCheck().then(ret => {
-    return mongoServer.updateHitokoto(_id, {source, author, category, hitokoto})
-  }).then(hitokoto => {
-    res.send({result: hitokoto});
-    next()
-  }).catch(e => {
+  if (PUBLIC_HITO_NEED_REVIEW) {
+    state = state
+      ? 'private'
+      : 'public';
+  } else {
+    state = state
+      ? 'private'
+      : 'reviewing'
+  }
+
+  mongoServer.updateHitokoto(req.userid, _id, {source, author, category, hitokoto, state}).then(hitokoto => {
     res.send({
-      code: e.code,
-      err: e.message || e
+      result: hitokoto,
+      message: state == 'reviewing'
+        ? '修改成功！请等待管理员审核!'
+        : '修改成功！'
     });
     next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
 
@@ -620,18 +711,11 @@ server.del('/api/collections/:name', function (req, res, next) {
 
   name = validator.trim(name);
   id = validator.trim(id);
-
-  req.hitoAuthCheck().then(ret => mongoServer.deleteHitokoto(id)).then(result => {
-    console.log(result);
-    res.send({result: result});
+  mongoServer.deleteHitokoto(req.userid, id).then(result => {
+    req.log.debug(result);
+    res.send({result: result, message: '删除句子成功!'});
     next()
-  }).catch(e => {
-    res.send({
-      code: e.code,
-      err: e.message || e
-    });
-    next()
-  })
+  }).catch(res.rejectedCommon(next))
 
 });
 
@@ -654,7 +738,7 @@ server.get('/api/explore', function (req, res, next) {
   }
 
   if (Number.isNaN(page) || Number.isNaN(perpage)) {
-    throw `参数非数字!page:${page},perpage:${perpage}`;
+    res.send(400, `参数非数字!page:${page},perpage:${perpage}`);
   } else {
     Promise.all([
       mongoServer.getPublicHitokotoCount(),
@@ -664,7 +748,7 @@ server.get('/api/explore', function (req, res, next) {
       let totalPages = Math.ceil(results[0] / perpage);
       res.send({total: totalPages, current: page, hitokotos: results[1]});
       next()
-    })
+    }).catch(res.rejectedCommon(next))
   }
 
 });
@@ -679,10 +763,7 @@ server.get('/api/explore/users/:uid', function (req, res, next) {
   mongoServer.exploreUser(uid).then(user => {
     res.send({user: user});
     next(false);
-  }, e => {
-    res.send({where: '执行错误', err: e});
-    next(false)
-  })
+  }, res.rejectedCommon(next))
 });
 
 /**
@@ -719,10 +800,35 @@ server.get('/api/explore/users/:uid/:colname', function (req, res, next) {
 
     res.send({hitokotos: results[1], totalPage: total, currentPage: page});
     next(false);
-  }, e => {
-    res.send({where: '执行错误', err: e});
-    next(false)
-  })
+  }, res.rejectedCommon(next))
+});
+
+server.on('after', restify.plugins.auditLogger({
+  log: bunyan.createLogger({
+    name: 'audit',
+    path: path.resolve(__dirname, 'server.after.log')
+  }),
+  event: 'after',
+  printLog: false
+}));
+
+server.on('InternalServer', function (req, res, err, callback) {
+  // this will get fired first, as it's the most relevant listener
+  req.log.error({type: 'InternalServer', err: err});
+  return callback();
+});
+
+server.on('restifyError', function (req, res, err, callback) {
+  // this is fired second.
+  req.log.error({type: 'restifyError', err: err});
+  return callback();
+});
+
+server.on('uncaughtException', function (req, res, route, err) {
+  console.log(route, err);
+  console.log('eee');
+  res.charSet('utf8');
+  res.send(new errs.InternalError('程序内部运行出错!'));
 });
 
 server.listen(9999, function () {
