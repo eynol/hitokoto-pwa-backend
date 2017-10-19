@@ -17,7 +17,7 @@ const cors = corsMiddleware({origins: ['*'], allowHeaders: ['API-Token'], expose
 
 const whitelistapi = [(/^\/cors/)];
 const CURRENTHOST = /^http(s)?:\/\/localhost:8080/;
-const PUBLIC_HITO_NEED_REVIEW = false;
+const PUBLIC_HITO_NEED_REVIEW = true;
 
 let logger = bunyan.createLogger({
   name: 'hitokoto',
@@ -115,9 +115,23 @@ server.use((function CommonPromiseException() {
   }
 })());
 
-server.use(function broadMessagePicker(req, res, next) {
-  next()
-})
+server.use((function broadMessagePicker() {
+  let BROADCASTS;
+  setInterval(() => {
+    mongoServer.getBroadcasts().then(messages => {
+      BROADCASTS = messages.map(msg => JSON.stringify(msg.endAt)).join('|');
+    })
+  }, 1000 * 60);
+
+  return (req, res, next) => {
+    if (BROADCASTS && BROADCASTS.length) {
+      res.once('header', function () {
+        res.header('broadcast', BROADCASTS);
+      });
+    }
+    next()
+  }
+})())
 
 // $regist(server);
 server.get('/', function (req, res, next) {
@@ -163,25 +177,45 @@ server.get('/api', function (req, res, next) {
 server.get('/cors/:username/:collection', function (req, res, next) {
   let username = req.params.username,
     collectionName = req.params.collection;
-  let {jsonp, seed} = req.query;
+  let {jsonp, seed, sync, cursor} = req.query;
   seed = Number(seed);
   username = validator.trim(username);
   collectionName = validator.trim(collectionName);
 
   res.noCache();
+  if (sync) {
+    if (cursor) {
 
-  mongoServer.corsUserCollection(username, collectionName, seed).then(hitokoto => {
-    if (jsonp) {
-      jsonp = validator.toString(jsonp);
-      res.header('Content-Type', 'application/javascript; charset=UTF-8');
-      res.send(200, jsonp + '(' + JSON.stringify(hitokoto) + ')');
-      return next();
+      if (cursor == 'empty') {
+        cursor = void 0;
+      }
+
+      mongoServer.syncPublicCollection(username, collectionName, cursor).then(result => {
+        res.send({data: result, limit: 100})
+        next();
+      }).catch(res.rejectedCommon(next));
+
     } else {
-      res.send(200, hitokoto);
-      return next();
-
+      mongoServer.userCollectionCountPublic(username, collectionName).then(count => {
+        res.send(200, {sync: count});
+        next();
+      }).catch(res.rejectedCommon(next))
     }
-  }).catch(res.rejectedCommon(next));
+  } else {
+
+    mongoServer.corsUserCollection(username, collectionName, seed).then(hitokoto => {
+      if (jsonp) {
+        jsonp = validator.toString(jsonp);
+        res.header('Content-Type', 'application/javascript; charset=UTF-8');
+        res.send(200, jsonp + '(' + JSON.stringify(hitokoto) + ')');
+        return next();
+      } else {
+        res.send(200, hitokoto);
+        return next();
+
+      }
+    }).catch(res.rejectedCommon(next));
+  }
 });
 
 /**
@@ -195,7 +229,7 @@ server.get('/api/sources/:uid/:fid', function (req, res, next) {
   uid = validator.trim(uid);
   fid = validator.trim(fid);
 
-  let {jsonp, seed} = req.query;
+  let {jsonp, seed, sync, cursor} = req.query;
   seed = Number(seed);
   res.noCache();
   res.charSet('utf8');
@@ -204,25 +238,49 @@ server.get('/api/sources/:uid/:fid', function (req, res, next) {
     res.send(new errs.ForbiddenError('禁止通过该私密接口访问其他人的来源，请使用CORS来源。'))
     return next(false);
   }
-  mongoServer.noCorsUserCollection(uid, fid, seed).then(hitokoto => {
-    if (jsonp) {
-      jsonp = validator.toString(jsonp);
-      res.header('Content-Type', 'application/javascript; charset=UTF-8');
-      res.send(200, jsonp + '(' + JSON.stringify(hitokoto) + ')');
-      return next();
+  if (sync) {
+    if (cursor) {
+
+      if (cursor == 'empty') {
+        cursor = void 0;
+      }
+
+      mongoServer.syncCollection(uid, fid, cursor).then(result => {
+        res.send({data: result, limit: 100})
+        next();
+      }).catch(res.rejectedCommon(next));
+
     } else {
-      res.send(200, hitokoto);
-      return next();
+      mongoServer.userCollectionCountPrivate(uid, fid).then(count => {
+        req.log.debug('count:', count)
+        res.send(200, {sync: count});
+        next();
+      }).catch(res.rejectedCommon(next))
     }
-  }).catch(res.rejectedCommon(next));
+  } else {
+
+    mongoServer.noCorsUserCollection(uid, fid, seed).then(hitokoto => {
+      if (jsonp) {
+        jsonp = validator.toString(jsonp);
+        res.header('Content-Type', 'application/javascript; charset=UTF-8');
+        res.send(200, jsonp + '(' + JSON.stringify(hitokoto) + ')');
+        return next();
+      } else {
+        res.send(200, hitokoto);
+        return next();
+      }
+    }).catch(res.rejectedCommon(next));
+  }
 });
 
 server.get('/cors', function (req, res, next) {
-  let {jsonp, count} = req.query;
+  let {jsonp, seed} = req.query;
+
+  seed = Number(seed);
 
   res.noCache();
   res.charSet('utf-8')
-  mongoServer.corsGetOneRandom().then(hitokoto => {
+  mongoServer.corsGetOneRandom(seed).then(hitokoto => {
     if (jsonp) {
       jsonp = validator.toString(jsonp);
       res.header('Content-Type', 'application/javascript; charset=UTF-8');
@@ -237,7 +295,7 @@ server.get('/cors', function (req, res, next) {
 });
 
 /**
- *  注册登录
+ *  注册
  */
 
 server.post('/api/regist', function (req, res, next) {
@@ -302,7 +360,7 @@ server.post('/api/regist', function (req, res, next) {
       let uid = user._id;
       trace('创建用户成功', user);
       return req.hitoAuthActive(uid).then(token => {
-        res.send({token, nickname, message: '注册成功！欢迎成为网站的一员！\n请遵守国家的相关法律，不发布任何有害内容。\n\n注意：这里不欢迎没有创意的广告！'});
+        res.send({token, nickname, uid, message: '注册成功！欢迎成为网站的一员！\n请遵守国家的相关法律，不发布任何有害内容。\n\n注意：这里不欢迎没有创意的广告！'});
         next()
       })
     }).catch(res.rejectedCommon(next))
@@ -319,7 +377,7 @@ server.post('/api/login', function (req, res, next) {
     return Promise.reject('10分钟内登陆次数不能超过30次！')
   }).then(() => mongoServer.userLogin(username, password)).then(({uid, nickname}) => {
     return req.hitoAuthActive(uid).then(token => {
-      res.send({token: token, nickname: nickname, message: '登录成功！'});
+      res.send({token: token, uid, nickname: nickname, message: '登录成功！'});
       next()
     })
   }).catch(res.rejectedCommon(next))
@@ -623,16 +681,16 @@ server.put('/api/collections/:name', function (req, res, next) {
   source = validator.trim(source);
   author = validator.trim(author);
   category = validator.trim(category);
-  state = Boolean(state);
+  state = state != 'false'; // 'true' != 'false' ~ true
 
   if (PUBLIC_HITO_NEED_REVIEW) {
     state = state
       ? 'private'
-      : 'public';
+      : 'reviewing';
   } else {
     state = state
       ? 'private'
-      : 'reviewing'
+      : 'public';
   }
   mongoServer.createHitokoto(req.userid, name, {
     id: 1,
@@ -677,21 +735,21 @@ server.post('/api/collections/:name', function (req, res, next) {
   source = validator.trim(source);
   author = validator.trim(author);
   category = validator.trim(category);
-  state = Boolean(state);
+  state = state != 'false';
 
   if (PUBLIC_HITO_NEED_REVIEW) {
     state = state
       ? 'private'
-      : 'public';
+      : 'reviewing';
   } else {
     state = state
       ? 'private'
-      : 'reviewing'
+      : 'public';
   }
 
   mongoServer.updateHitokoto(req.userid, _id, {source, author, category, hitokoto, state}).then(hitokoto => {
     res.send({
-      result: hitokoto,
+      hitokoto: hitokoto,
       message: state == 'reviewing'
         ? '修改成功！请等待管理员审核!'
         : '修改成功！'
@@ -711,9 +769,9 @@ server.del('/api/collections/:name', function (req, res, next) {
 
   name = validator.trim(name);
   id = validator.trim(id);
-  mongoServer.deleteHitokoto(req.userid, id).then(result => {
-    req.log.debug(result);
-    res.send({result: result, message: '删除句子成功!'});
+  mongoServer.deleteHitokoto(req.userid, id).then(hitokoto => {
+    req.log.debug(hitokoto);
+    res.send({hitokoto: hitokoto, message: '删除句子成功!'});
     next()
   }).catch(res.rejectedCommon(next))
 
@@ -767,7 +825,7 @@ server.get('/api/explore/users/:uid', function (req, res, next) {
 });
 
 /**
- * 得得到用户信息
+ * 得得到用户集合内容信息
  */
 server.get('/api/explore/users/:uid/:colname', function (req, res, next) {
 
@@ -801,6 +859,114 @@ server.get('/api/explore/users/:uid/:colname', function (req, res, next) {
     res.send({hitokotos: results[1], totalPage: total, currentPage: page});
     next(false);
   }, res.rejectedCommon(next))
+});
+
+server.get('/api/backups', function (req, res, next) {
+  req.log.debug(req.userid);
+  mongoServer.getBackup(req.userid).then(backup => {
+    res.send({backup});
+    next();
+  }).catch(res.rejectedCommon(next));
+})
+server.post('/api/backups', function (req, res, next) {
+  let {data} = req.body;
+  data = validator.trim(data);
+  mongoServer.storeBackup(req.userid, data).then(() => {
+    res.send({message: '备份成功！'});
+    next();
+  }).catch(res.rejectedCommon(next));
+})
+
+/**
+ *  Admin API
+ */
+
+//获取需要审核的hitokoto
+server.get('/api/admin/hitokotos/review', function (req, res, next) {
+
+  let page = req.query.page || 1;
+  let perpage = req.query.perpage || 20;
+  page = ~~Number(page);
+  perpage = ~~Number(perpage);
+  if (page < 1) {
+    page = 1;
+  }
+
+  if (perpage < 1) {
+    perpage = 10;
+  }
+
+  mongoServer.roleCheck(req.userid, 'reviewHito').then(() => {
+    //
+    return Promise.all([
+      mongoServer.getNeedReviewingHitokotosCount(),
+      mongoServer.getNeedReviewingHitokotos(page, perpage)
+    ]).then((results) => {
+      let count = results[0],
+        total = Math.ceil(count / perpage);
+
+      res.send({hitokotos: results[1], totalPage: total, currentPage: page});
+      next(false)
+    })
+  }).catch(res.rejectedCommon(next));
+});
+
+//修改hitokoto状态
+server.post('/api/admin/hitokotos/review', function (req, res, next) {
+  let {hid, state} = req.body;
+
+  hid = validator.trim(hid);
+  state = validator.trim(state);
+
+  mongoServer.roleCheck(req.userid, 'reviewHito').then(() => {
+    //
+    return mongoServer.changeHitokotoState(hid, state).then(() => {
+      res.send({message: '操作成功！'});
+      next()
+    })
+  }).catch(res.rejectedCommon(next));
+});
+
+server.put('/api/admin/broadcasts', function (req, res, next) {
+  let {endAt, message} = req.body;
+
+  mongoServer.roleCheck(req.userid, 'broadcast').then(() => {
+    return mongoServer.putBroadcast({endAt, message}).then((message) => {
+      res.send({message});
+      next()
+    })
+  }).catch(res.rejectedCommon(next));
+});
+
+server.get('/api/admin/broadcasts', function (req, res, next) {
+
+  mongoServer.getBroadcasts().then((messages) => {
+    res.send({message: '操作成功！', messages});
+    next()
+  }).catch(res.rejectedCommon(next));
+});
+
+server.post('/api/admin/broadcasts', function (req, res, next) {
+
+  let {endAt, message, _id} = req.body;
+
+  mongoServer.roleCheck(req.userid, 'broadcast').then(() => {
+    return mongoServer.updateBroadcast(_id, {endAt, message}).then((message) => {
+      res.send({message});
+      next()
+    })
+  }).catch(res.rejectedCommon(next));
+});
+server.del('/api/admin/broadcasts', function (req, res, next) {
+
+  let {_id} = req.body;
+
+  mongoServer.roleCheck(req.userid, 'broadcast').then(() => {
+    return mongoServer.deleteBroadcast(_id).then((message) => {
+      res.send({message});
+      next()
+    })
+  }).catch(res.rejectedCommon(next));
 });
 
 server.on('after', restify.plugins.auditLogger({

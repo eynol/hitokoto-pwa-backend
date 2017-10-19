@@ -28,7 +28,7 @@ let autoIncrement = require("mongodb-autoincrement");
 autoIncrement.setDefaults({field: 'id'});
 
 mongoose.Promise = global.Promise;
-mongoose.connect(config.db);
+mongoose.connect(config.db, {useMongoClient: true});
 
 let db = mongoose.connection;
 db.on('error', logger.error.bind(logger));
@@ -64,6 +64,7 @@ let userSchema = mongoose.Schema({
   },
   photo: String,
   intro: String,
+  sourcesAndPatterns: String,
   permited: Boolean
 }, {
   timestamps: {
@@ -199,6 +200,14 @@ throttleSchema.index({
   key: 1
 }, {expireAfterSeconds: 60 *60});
 
+var broadcastSchema = mongoose.Schema({
+  endAt: {
+    type: Schema.Types.Date,
+    index: true
+  },
+  message: String
+})
+
 var User = mongoose.model('user', userSchema);
 var Hitokoto = mongoose.model('hitokoto', hitokotoSchema);
 var Collection = mongoose.model('folder', collectionSchema);
@@ -206,6 +215,7 @@ var Follow = mongoose.model('follow', followSchema);
 var Email = mongoose.model('email', emailPushSchema);
 var Token = mongoose.model('token', tokenSchema);
 var Throttle = mongoose.model('throttle', throttleSchema);
+var Broadcast = mongoose.model('broadcast', broadcastSchema);
 
 /**
  *  节流操作
@@ -301,8 +311,6 @@ exports.creatUser = function (user, test) {
         })
       }
     };
-  }).catch(e => {
-    return Promise.reject('创建用户失败！')
   });
 };
 
@@ -374,7 +382,7 @@ exports.exploreUser = function (uid) {
  */
 exports.exploreUserCollection = function (uid, cName, page = 1, perpage = 20) {
   return Collection.findOne({owner: uid, name: cName}).exec().then(collection => {
-    return Hitokoto.find({creator_id: uid, fid: collection._id}).sort({created_at: -1}).skip((page - 1) * perpage).limit(perpage).exec()
+    return Hitokoto.find({creator_id: uid, fid: collection._id, state: 'public'}).sort({created_at: -1}).skip((page - 1) * perpage).limit(perpage).exec()
   })
 };
 /**
@@ -476,6 +484,38 @@ exports.userCollections = function (uid) {
   })
 }
 
+/**
+ * 获得用户一个句集的总数
+ *
+ * @param {String} uid
+ * @param {String} fid
+ * @returns
+ */
+exports.userCollectionCountPrivate = function (uid, fid) {
+  return Hitokoto.find({creator_id: uid, fid: fid}).count().exec().then(count => {
+    logger.debug(count);
+    return count;
+  })
+}
+
+/**
+ * 获得用户一个句集的总数
+ *
+ * @param {String} username
+ * @param {String} collectionName
+ * @returns
+ */
+exports.userCollectionCountPublic = function (username, collectionName) {
+  return User.findOne({
+    nickname: username
+  }, {_id: 1}).exec().then(user => {
+    return Collection.find({
+      owner: user._id,
+      name: collectionName
+    }, {count: 1}).exec().then(collec => collec.count)
+  })
+
+}
 /**
  *  更新句集的名字
  *
@@ -617,6 +657,8 @@ exports.updateHitokoto = function (uid, hid, hitokoto) {
       } else if (hitokoto.state == 'private' || hitokoto.state == 'reviewing') {
         return;
       }
+    } else if (oldHitokoto.state == 'rejected') {
+      return;
     }
 
     return Promise.reject('修改失败,你不按套路出牌。');
@@ -659,10 +701,7 @@ exports.searchAllPublicHitokotos = function (page, perpage) {
   perpage = perpage || 20;
   return Hitokoto.find({
     state: 'public'
-  }, {
-    _id: 0,
-    _v: 0
-  }).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
+  }, {__v: 0}).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
     logger.debug(hitokotos, '所有公开的用户');
     return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
       logger.debug(nameList, '名字');
@@ -882,7 +921,7 @@ exports.corsUserCollection = function (username, collectionName, lastMagicNumber
           }, {__v: 0}).skip(skipCount).limit(1).exec().then(hitokoto => {
             if (hitokoto.length) {
               hitokoto = hitokoto[0].toObject();
-              hitokoto.f = collection.name;
+              hitokoto.collection = collection.name;
               return hitokoto;
             } else {
               return Promise.reject({message: '集合内容为空', code: 404})
@@ -914,7 +953,7 @@ exports.noCorsUserCollection = function (uid, fid, lastMagicNumber) {
         hitokoto = hitokoto[0].toObject();
         return Collection.findById(fid, {name: 1}).exec().then(collection => {
 
-          hitokoto.f = collection.name;
+          hitokoto.collection = collection.name;
           return hitokoto;
 
         })
@@ -922,13 +961,60 @@ exports.noCorsUserCollection = function (uid, fid, lastMagicNumber) {
         return Promise.reject({message: '集合内容为空', code: 404})
       }
     });
+  })
+}
 
+exports.syncCollection = function (uid, fid, last) {
+  if (!last) {
+    return Hitokoto.find({creator_id: uid, fid: fid}).sort({_id: 1}).limit(100).exec()
+  } else {
+    return Hitokoto.find({
+      _id: {
+        $gt: last
+      },
+      creator_id: uid,
+      fid: fid
+    }).sort({_id: 1}).limit(100).exec()
+  }
+}
+
+exports.syncPublicCollection = function (username, collectionName, last) {
+  return User.findOne({
+    nickname: username
+  }, {_id: 1}).exec().then(user => {
+    if (!user) {
+      return Promise.reject({message: '用户不存在', code: 404})
+    }
+    let uid = user._id;
+    return Collection.findOne({
+      owner: uid,
+      name: collectionName
+    }, {_id: 1}).exec().then(collection => {
+      if (!collection) {
+        return Promise.reject({message: '句集不存在！可能改名字了！', code: 404})
+      }
+      let fid = collection._id;
+
+      if (!last) {
+        return Hitokoto.find({creator_id: uid, fid: fid, state: 'public'}).sort({_id: 1}).limit(100).exec()
+      } else {
+        return Hitokoto.find({
+          _id: {
+            $gt: last
+          },
+          creator_id: uid,
+          fid: fid,
+          state: 'public'
+        }).sort({_id: 1}).limit(100).exec()
+      }
+    })
   })
 
 }
 
 /**
  * 跨域获取某一个集合内的hitokoto;
+ * //TODO
  */
 exports.corsGetOneRandom = function (lastMagicNumber) {
 
@@ -946,7 +1032,7 @@ exports.corsGetOneRandom = function (lastMagicNumber) {
         hitokoto = hitokoto[0];
         return hitokoto.getMyCollectionName().then(name => {
           hitokoto = hitokoto.toObject();
-          hitokoto.f = name;
+          hitokoto.collection = name;
           return hitokoto;
         })
       } else {
@@ -955,4 +1041,142 @@ exports.corsGetOneRandom = function (lastMagicNumber) {
     });
   });
 
+}
+
+exports.storeBackup = function (uid, data) {
+  return User.findById(uid, {sourcesAndPatterns: 1}).exec().then(user => {
+    if (user) {
+      user.sourcesAndPatterns = data;
+      user.markModified('sourcesAndPatterns');
+      return user.save();
+    } else {
+      return Promise.reject('用户不存在');
+    }
+  })
+}
+
+exports.getBackup = function (uid) {
+  return User.findById(uid, {sourcesAndPatterns: 1}).exec().then(user => {
+    if (user) {
+      return user.sourcesAndPatterns
+    } else {
+      return Promise.reject('用户不存在');
+    }
+  })
+}
+
+exports.roleCheck = function (uid, role) {
+  return User.findById(uid, {role: 1}).exec().then(user => {
+    if (!user) {
+      return Promise.reject('用户不存在！');
+    } else if (user.role) {
+
+      let roles = user.role.split('|');
+      if (~ roles.findIndex(r => r == role)) {
+        //找到了;
+        return true;
+      } else {
+        return Promise.reject('无权限！')
+      };
+    } else {
+      return Promise.reject('无权限！')
+    }
+  })
+}
+
+//Admin method
+
+exports.changeHitokotoState = function (hid, state) {
+  return Hitokoto.findByIdAndUpdate(hid, {
+    state
+  }, {new: false}).then(old => {
+    //
+    if (old.state == 'public') {
+      if (state == 'public') {
+        //通过为公开
+        return;
+      } else if (state == 'private' || state == 'reviewing') {
+        return Collection.findByIdAndUpdate(old.fid, {
+          $inc: {
+            count: -1
+          }
+        }).exec();
+      }
+    } else if (old.state == 'private') {
+      //这个函数块不会被调用
+      if (state == 'public') {
+        return Collection.findByIdAndUpdate(old.fid, {
+          $inc: {
+            count: 1
+          }
+        }).exec();
+      } else if (state == 'private' || state == 'reviewing') {
+        return;
+      }
+    } else if (old.state == 'reviewing') {
+      //主要是这一部分
+      if (state == 'public') {
+        return Collection.findByIdAndUpdate(old.fid, {
+          $inc: {
+            count: 1
+          }
+        }).exec();
+      } else if (state == 'private' || state == 'reviewing') {
+        return;
+      }
+    } else if (old.state == 'rejected') {
+      if (state == 'public') {
+        return Collection.findByIdAndUpdate(old.fid, {
+          $inc: {
+            count: 1
+          }
+        }).exec();
+      } else if (state == 'private' || state == 'reviewing') {
+        return;
+      }
+    }
+
+  })
+
+}
+
+exports.getNeedReviewingHitokotosCount = function () {
+  return Hitokoto.find({state: 'reviewing'}).count()
+}
+
+exports.getNeedReviewingHitokotos = function (page, perpage) {
+  page = page || 1;
+  perpage = perpage || 20;
+  return Hitokoto.find({
+    state: 'reviewing'
+  }, {__v: 0}).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
+    logger.debug(hitokotos, '所有需要review的句子');
+    return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
+      logger.debug(nameList, '名字');
+      return hitokotos.map((hitokoto, index) => {
+        hitokoto = hitokoto.toObject();
+        hitokoto.collection = nameList[index];
+        return hitokoto;
+      })
+    })
+  })
+}
+
+//Broadcast
+exports.getBroadcasts = function () {
+  return Broadcast.find({
+    endAt: {
+      $gt: new Date()
+    }
+  }).exec()
+}
+
+exports.putBroadcast = function (b) {
+  return Broadcast.create(b)
+}
+exports.updateBroadcast = function (bid, broadcast) {
+  return Broadcast.findByIdAndUpdate(bid, broadcast, {new: true}).exec()
+}
+exports.deleteBroadcast = function (bid) {
+  return Broadcast.findByIdAndRemove(bid).exec()
 }
