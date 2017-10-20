@@ -14,7 +14,7 @@ function activeAuth(uid) {
   try {
     if (this.headers && this.headers['user-agent']) {
       let token = generateAuthToken();
-      let ip = this.headers['x-forwarded-for'] || this.connection.remoteAddress;
+      let ip = this.headers['x-real-ip'] || this.headers['x-forwarded-for'] || this.connection.remoteAddress;
       let ua = validator.trim(this.headers['user-agent']);
       return mongoServer.authActive({ua, token, uid, ip}).then(doc => {
         return token;
@@ -61,7 +61,7 @@ module.exports = function (whitelist) {
       if (~ whiteIndex) {
         return next();
       }
-      if (req.headers && req.headers['user-agent']) {
+      if (req.headers && req.headers['user-agent'] && this.headers['x-real-ip']) {
         let token = req.headers['x-api-token'];
         let ua = req.headers['user-agent'];
         if (token && ua) {

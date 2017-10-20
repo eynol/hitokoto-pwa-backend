@@ -904,15 +904,27 @@ server.get('/api/admin/hitokotos/review', function (req, res, next) {
 
   mongoServer.roleCheck(req.userid, 'reviewHito').then(() => {
     //
-    return Promise.all([
-      mongoServer.getNeedReviewingHitokotosCount(),
-      mongoServer.getNeedReviewingHitokotos(page, perpage)
-    ]).then((results) => {
+
+    function getAll(page, perpage) {
+      return Promise.all([
+        mongoServer.getNeedReviewingHitokotosCount(),
+        mongoServer.getNeedReviewingHitokotos(page, perpage)
+      ])
+    }
+
+    function selectResult(results) {
       let count = results[0],
         total = Math.ceil(count / perpage);
+      if (page > 0 && totalPage > 0 && totalPage < page) {
+        return getAll(--page, perpage).then(selectResult);
+      } else {
+        return ({hitokotos: results[1], totalPage: total, currentPage: page})
+      }
+    }
 
-      res.send({hitokotos: results[1], totalPage: total, currentPage: page});
-      next(false)
+    return getAll(page, perpage).then(selectResult).then(result => {
+      res.send(result);
+      next();
     })
   }).catch(res.rejectedCommon(next));
 });

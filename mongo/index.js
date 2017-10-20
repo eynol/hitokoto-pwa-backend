@@ -1149,7 +1149,7 @@ exports.getNeedReviewingHitokotos = function (page, perpage) {
   perpage = perpage || 20;
   return Hitokoto.find({
     state: 'reviewing'
-  }, {__v: 0}).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
+  }, {__v: 0}).sort({"id": 1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
     logger.debug(hitokotos, '所有需要review的句子');
     return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
       logger.debug(nameList, '名字');
