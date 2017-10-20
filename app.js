@@ -997,6 +997,6 @@ server.on('uncaughtException', function (req, res, route, err) {
   res.send(new errs.InternalError('程序内部运行出错!'));
 });
 
-server.listen(9999, function () {
+server.listen(process.env.PORT || 9999, function () {
   console.log('%s listening at %s', server.name, server.url);
 });
