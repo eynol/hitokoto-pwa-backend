@@ -61,7 +61,13 @@ module.exports = function (whitelist) {
       if (~ whiteIndex) {
         return next();
       }
-      if (req.headers && req.headers['user-agent'] && req.headers['x-real-ip']) {
+      if (process.env.NODE_ENV == 'production') {
+        if (!req.headers['x-real-ip']) {
+          res.send(new errs.ForbiddenError('禁止访问'))
+          return next(false);
+        }
+      }
+      if (req.headers && req.headers['user-agent']) {
         let token = req.headers['x-api-token'];
         let ua = req.headers['user-agent'];
         if (token && ua) {

@@ -998,6 +998,7 @@ server.on('after', restify.plugins.auditLogger({
 
 server.on('InternalServer', function (req, res, err, callback) {
   // this will get fired first, as it's the most relevant listener
+  emailServer.notifyErorHappened(err);
   req.log.error({type: 'InternalServer', err: err});
   return callback();
 });
@@ -1009,8 +1010,6 @@ server.on('restifyError', function (req, res, err, callback) {
 });
 
 server.on('uncaughtException', function (req, res, route, err) {
-  console.log(route, err);
-  console.log('eee');
   res.charSet('utf8');
   res.send(new errs.InternalError('程序内部运行出错!'));
 });

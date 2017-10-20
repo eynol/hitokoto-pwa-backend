@@ -100,3 +100,25 @@ exports.notifyChangePassword = function (email) {
     });
   })
 }
+
+exports.notifyErorHappened = function (err) {
+  return new Promise((resolve, reject) => {
+
+    // setup email data with unicode symbols
+    let mailOptions = {
+      from: '"一言" <mail@heitaov.cn>', // sender address
+      to: "625608852@qq.com", // list of receivers
+      subject: `一言-有错误发生！。`, // Subject line
+      text: templates.TEXT01('错误：', err.message, new Date().toLocaleString()), // plain text body
+      html: templates.HTML01('Error', '错误：', '' + err.message + '\n' + err.stack, new Date().toLocaleString()) // html body
+    };
+
+    transporter.sendMail(mailOptions, (error, info) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(info);
+      }
+    });
+  })
+}
