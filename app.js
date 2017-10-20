@@ -915,7 +915,7 @@ server.get('/api/admin/hitokotos/review', function (req, res, next) {
     function selectResult(results) {
       let count = results[0],
         total = Math.ceil(count / perpage);
-      if (page > 0 && totalPage > 0 && totalPage < page) {
+      if (page > 0 && total > 0 && total < page) {
         return getAll(--page, perpage).then(selectResult);
       } else {
         return ({hitokotos: results[1], totalPage: total, currentPage: page})
