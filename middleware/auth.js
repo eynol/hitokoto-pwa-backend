@@ -61,7 +61,7 @@ module.exports = function (whitelist) {
       if (~ whiteIndex) {
         return next();
       }
-      if (req.headers && req.headers['user-agent'] && this.headers['x-real-ip']) {
+      if (req.headers && req.headers['user-agent'] && req.headers['x-real-ip']) {
         let token = req.headers['x-api-token'];
         let ua = req.headers['user-agent'];
         if (token && ua) {
