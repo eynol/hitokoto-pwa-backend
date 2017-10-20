@@ -16,7 +16,13 @@ const cors = corsMiddleware({origins: ['*'], allowHeaders: ['API-Token'], expose
 // var $regist = require('./routes/regist.js');
 
 const whitelistapi = [(/^\/cors/)];
-const CURRENTHOST = /^http(s)?:\/\/localhost:8080/;
+let CURRENTHOST;
+if (process.env.NODE_ENV == "production") {
+  CURRENTHOST = /^https:\/\/hitokoto.heitaov.cn/
+} else {
+  CURRENTHOST = /^http:\/\/localhost:8080/;
+}
+
 const PUBLIC_HITO_NEED_REVIEW = true;
 
 let logger = bunyan.createLogger({
