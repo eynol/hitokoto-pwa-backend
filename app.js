@@ -1,7 +1,6 @@
 const restify = require('restify');
 const corsMiddleware = require('restify-cors-middleware')
 const validator = require('validator');
-const bunyan = require('bunyan');
 const path = require('path');
 const errs = require('restify-errors');
 
@@ -9,8 +8,7 @@ const mongoServer = require('./mongo');
 const emailServer = require('./mailpush/index.js');
 const authMiddleware = require('./middleware/auth')
 const appUtil = require('./util');
-
-let trace = console.log.bind(console);
+const bunyan = require('./logger');
 
 const cors = corsMiddleware({origins: ['*'], allowHeaders: ['API-Token'], exposeHeaders: ['API-Token-Expiry']})
 // var $regist = require('./routes/regist.js');
@@ -25,26 +23,7 @@ if (process.env.NODE_ENV == "production") {
 
 const PUBLIC_HITO_NEED_REVIEW = true;
 
-let logger = bunyan.createLogger({
-  name: 'hitokoto',
-  streams: [
-    {
-      stream: process.stdout,
-      level: bunyan.DEBUG
-    }, {
-      path: path.resolve(__dirname, 'info.log'),
-      level: bunyan.INFO
-    }, {
-      path: path.resolve(__dirname, 'warn.log'),
-      level: bunyan.WARN
-    }, {
-      path: path.resolve(__dirname, 'error.log'),
-      level: bunyan.ERROR
-    }
-  ]
-});
-
-const server = restify.createServer({name: 'hitokoto', version: '1.0.0', log: logger});
+const server = restify.createServer({name: 'hitokoto', version: '1.0.0', log: bunyan.logger});
 
 //  跨域 url 白名单
 server.pre(function corsWhiteList(req, res, next) {
@@ -364,7 +343,7 @@ server.post('/api/regist', function (req, res, next) {
       nickname
     }, false)).then(user => {
       let uid = user._id;
-      trace('创建用户成功', user);
+
       return req.hitoAuthActive(uid).then(token => {
         res.send({token, nickname, uid, message: '注册成功！\n欢迎成为网站的一员！\n请遵守国家的相关法律，不发布任何有害内容。'});
         next()
@@ -419,7 +398,7 @@ server.post('/api/password', function (req, res, next) {
 server.get('/api/useremail', function (req, res, next) {
 
   mongoServer.getUserByUid(req.userid).then(user => {
-    trace('得到用户邮箱', user);
+
     return appUtil.hideEmail(user.email);
   }).then(email => {
     res.send({email})
@@ -988,10 +967,7 @@ server.del('/api/admin/broadcasts', function (req, res, next) {
 });
 
 server.on('after', restify.plugins.auditLogger({
-  log: bunyan.createLogger({
-    name: 'audit',
-    path: path.resolve(__dirname, 'server.after.log')
-  }),
+  log: bunyan.logger.child({for: 'audit'}),
   event: 'after',
   printLog: false
 }));

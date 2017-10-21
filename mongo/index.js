@@ -2,27 +2,10 @@ const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 const config = require('./mongo.hito.secret.config.json');
 const co = require('co');
-const bunyan = require('bunyan');
 const path = require('path');
+const bunyan = require('../logger');
 
-let logger = bunyan.createLogger({
-  name: 'hitokoto.mongoserver',
-  streams: [
-    {
-      stream: process.stdout,
-      level: bunyan.DEBUG
-    }, {
-      path: path.resolve(__dirname, 'mongo.info.log'),
-      level: bunyan.INFO
-    }, {
-      path: path.resolve(__dirname, 'mongo.warn.log'),
-      level: bunyan.WARN
-    }, {
-      path: path.resolve(__dirname, 'mongo.error.log'),
-      level: bunyan.ERROR
-    }
-  ]
-});
+let logger = bunyan.logger.child({for: 'mongodb'})
 
 let autoIncrement = require("mongodb-autoincrement");
 autoIncrement.setDefaults({field: 'id'});
