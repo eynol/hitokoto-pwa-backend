@@ -428,13 +428,25 @@ exports.updateUserPassword = function (uid, oldpassword, newpassword) {
  * @returns {Promise<{uid:String,nickname:String}>}
  */
 exports.userLogin = function (username, password) {
-  return User.findOne({username}).select('_id username password nickname permited').exec().then(doc => {
+  return User.findOne({username}).select('_id username password nickname permited role').exec().then(doc => {
     if (doc) {
       if (!doc.permited) {
         return Promise.reject({message: '禁止该用户访问！请联系管理员', code: 403})
       }
       if (doc.password == password) {
-        return {uid: doc._id, nickname: doc.nickname};
+        let role = doc.role,
+          permission = 0;
+        if (role) {
+          role = role.split('|');
+          if (~ role.indexOf('reviewHito')) {
+            permission = permission | 1;
+          }
+          if (~ role.indexOf('broadcast')) {
+            permission = permission | 1 << 1;
+          }
+        }
+
+        return {uid: doc._id, nickname: doc.nickname, permission};
       } else {
         return Promise.reject('密码错误！')
       }

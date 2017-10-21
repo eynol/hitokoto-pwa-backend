@@ -366,7 +366,7 @@ server.post('/api/regist', function (req, res, next) {
       let uid = user._id;
       trace('创建用户成功', user);
       return req.hitoAuthActive(uid).then(token => {
-        res.send({token, nickname, uid, message: '注册成功！欢迎成为网站的一员！\n请遵守国家的相关法律，不发布任何有害内容。\n\n注意：这里不欢迎没有创意的广告！'});
+        res.send({token, nickname, uid, message: '注册成功！\n欢迎成为网站的一员！\n请遵守国家的相关法律，不发布任何有害内容。'});
         next()
       })
     }).catch(res.rejectedCommon(next))
@@ -381,9 +381,9 @@ server.post('/api/login', function (req, res, next) {
 
   mongoServer.throttleTenMinute(username, 30).catch(e => {
     return Promise.reject('10分钟内登陆次数不能超过30次！')
-  }).then(() => mongoServer.userLogin(username, password)).then(({uid, nickname}) => {
+  }).then(() => mongoServer.userLogin(username, password)).then(({uid, nickname, permission}) => {
     return req.hitoAuthActive(uid).then(token => {
-      res.send({token: token, uid, nickname: nickname, message: '登录成功！'});
+      res.send({token: token, uid, permission, nickname: nickname, message: '登录成功！'});
       next()
     })
   }).catch(res.rejectedCommon(next))
