@@ -974,7 +974,9 @@ server.on('after', restify.plugins.auditLogger({
 
 server.on('InternalServer', function (req, res, err, callback) {
   // this will get fired first, as it's the most relevant listener
-  emailServer.notifyErorHappened(err);
+  if (process.env.NODE_ENV == 'production') {
+    emailServer.notifyErorHappened(err);
+  }
   req.log.error({type: 'InternalServer', err: err});
   return callback();
 });

@@ -549,7 +549,29 @@ exports.newUserCollection = function (uid, newname, state = 'public') {
  * @returns
  */
 exports.deleteUserCollection = function (uid, oldname) {
-  return Collection.findOneAndRemove({owner: uid, name: oldname})
+  return Collection.findOneAndRemove({owner: uid, name: oldname}).exec().then(collection => {
+    if (!collection) {
+      return Promise.reject('无该句集！');
+    } else {
+      let fid = collection._id;
+      return Collection.findOne({owner: uid, name: '默认句集'}).exec().then(defaultCollection => {
+        return Promise.all([
+          defaultCollection.update({
+            $inc: {
+              count: collection.count
+            }
+          }).exec(),
+          Hitokoto.update({
+            fid: fid
+          }, {
+            $set: {
+              fid: defaultCollection._id
+            }
+          }).exec()
+        ]);
+      })
+    }
+  })
 
 }
 
