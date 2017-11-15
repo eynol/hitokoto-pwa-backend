@@ -5,17 +5,23 @@ const co = require('co');
 const path = require('path');
 const bunyan = require('../logger');
 
-let logger = bunyan.logger.child({for: 'mongodb'})
+let logger = bunyan.logger.child({
+  for: 'mongodb'
+})
 
 let autoIncrement = require("mongodb-autoincrement");
-autoIncrement.setDefaults({field: 'id'});
+autoIncrement.setDefaults({
+  field: 'id'
+});
 
 mongoose.Promise = global.Promise;
-mongoose.connect(config.db, {useMongoClient: true});
+mongoose.connect(config.db, {
+  useMongoClient: true
+});
 
 let db = mongoose.connection;
 db.on('error', logger.error.bind(logger));
-db.on('open', function () {
+db.on('open', function() {
   // we're connected!
   console.log('db open success!')
 });
@@ -56,22 +62,37 @@ let userSchema = mongoose.Schema({
   }
 })
 
-userSchema.methods.changePermit = function (permited) {
+userSchema.methods.changePermit = function(permited) {
   this.permited = permited;
   return this.save();
 }
 
-userSchema.methods.createDefaultCollection = function () {
-  return this.model('folder').create({name: '默认句集', owner: this._id, count: 0, state: 'public'});
+userSchema.methods.createDefaultCollection = function() {
+  return this.model('folder').create({
+    name: '默认句集',
+    owner: this._id,
+    count: 0,
+    state: 'public'
+  });
 };
-userSchema.methods.myCollections = function () {
-  return this.model('folder').find({owner: this._id}).sort({'updated_at': -1});
+userSchema.methods.myCollections = function() {
+  return this.model('folder').find({
+    owner: this._id
+  }).sort({
+    'updated_at': -1
+  });
 };
 
-userSchema.methods.updateCollectionName = function (oldname, newname) {
-  return this.model('folder').findOne({owner: this._id, name: oldname}).exec().then(collection => {
+userSchema.methods.updateCollectionName = function(oldname, newname) {
+  return this.model('folder').findOne({
+    owner: this._id,
+    name: oldname
+  }).exec().then(collection => {
     if (!collection) {
-      return Promise.reject({message: '没有这个名字的句集', code: 404})
+      return Promise.reject({
+        message: '没有这个名字的句集',
+        code: 404
+      })
     }
     collection.name = newname;
     return collection.save()
@@ -101,8 +122,10 @@ let collectionSchema = mongoose.Schema({
     updatedAt: 'updated_at'
   }
 });
-collectionSchema.methods.countAll = function () {
-  return this.model('hitokoto').find({fid: this._id}).count().exec()
+collectionSchema.methods.countAll = function() {
+  return this.model('hitokoto').find({
+    fid: this._id
+  }).count().exec()
 }
 
 let hitokotoSchema = mongoose.Schema({
@@ -137,12 +160,16 @@ let hitokotoSchema = mongoose.Schema({
   }
 })
 
-hitokotoSchema.methods.getMyCollectionName = function () {
+hitokotoSchema.methods.getMyCollectionName = function() {
   return this.model('folder').findOne({
     _id: this.fid
-  }, {name: 1}).exec().then(collection => collection.name);
+  }, {
+    name: 1
+  }).exec().then(collection => collection.name);
 }
-hitokotoSchema.plugin(autoIncrement.mongoosePlugin, {field: 'id'});
+hitokotoSchema.plugin(autoIncrement.mongoosePlugin, {
+  field: 'id'
+});
 
 var emailPushSchema = mongoose.Schema({
   email: {
@@ -181,7 +208,9 @@ var throttleSchema = mongoose.Schema({
 
 throttleSchema.index({
   key: 1
-}, {expireAfterSeconds: 60 *60});
+}, {
+  expireAfterSeconds: 60 * 60
+});
 
 var broadcastSchema = mongoose.Schema({
   endAt: {
@@ -209,7 +238,7 @@ var Broadcast = mongoose.model('broadcast', broadcastSchema);
  * @param {String} namespace
  * @returns
  */
-exports.throttle = function (key, limit, time, namespace) {
+exports.throttle = function(key, limit, time, namespace) {
   return Throttle.find({
     key,
     time: {
@@ -220,7 +249,11 @@ exports.throttle = function (key, limit, time, namespace) {
     if (total >= limit) {
       return Promise.reject('操作过于频繁，请稍后再试。');
     } else {
-      return Throttle.create({key, namespace, time: new Date()}).then(() => Promise.resolve('' + total));
+      return Throttle.create({
+        key,
+        namespace,
+        time: new Date()
+      }).then(() => Promise.resolve('' + total));
     }
   })
 }
@@ -233,7 +266,7 @@ exports.throttle = function (key, limit, time, namespace) {
  * @param {String} namespace
  * @returns
  */
-exports.throttleOneMinute = function (key, limit, namespace) {
+exports.throttleOneMinute = function(key, limit, namespace) {
   let mm1 = new Date();
   mm1.setMinutes(mm1.getMinutes() - 1);
   return exports.throttle(key, limit, mm1, namespace);
@@ -246,7 +279,7 @@ exports.throttleOneMinute = function (key, limit, namespace) {
  * @param {String} namespace
  * @returns
  */
-exports.throttleTenMinute = function (key, limit, namespace) {
+exports.throttleTenMinute = function(key, limit, namespace) {
   let mm10 = new Date();
   mm10.setMinutes(mm10.getMinutes() - 10);
   return exports.throttle(key, limit, mm10, namespace);
@@ -259,7 +292,7 @@ exports.throttleTenMinute = function (key, limit, namespace) {
  * @param {boolean} test
  * @returns
  */
-exports.creatUser = function (user, test) {
+exports.creatUser = function(user, test) {
   return User.find({
     "$or": [
       {
@@ -293,7 +326,8 @@ exports.creatUser = function (user, test) {
           return user.createDefaultCollection().then(() => user);
         })
       }
-    };
+    }
+    ;
   });
 };
 
@@ -303,7 +337,7 @@ exports.creatUser = function (user, test) {
  * @param {String} uid
  * @returns
  */
-exports.getUserByUid = function (uid) {
+exports.getUserByUid = function(uid) {
   return User.findById(uid).select('username nickname email').exec().then(user => {
     logger.debug('由uid查询用户', user);
     if (user) {
@@ -320,8 +354,10 @@ exports.getUserByUid = function (uid) {
  * @param {String} email
  * @returns
  */
-exports.getUserByEmail = function (email) {
-  return User.findOne({email}).select('username nickname email').exec()
+exports.getUserByEmail = function(email) {
+  return User.findOne({
+    email
+  }).select('username nickname email').exec()
 };
 
 /**
@@ -331,7 +367,7 @@ exports.getUserByEmail = function (email) {
  * @returns
  *
  */
-exports.exploreUser = function (uid) {
+exports.exploreUser = function(uid) {
   return User.findById(uid).select('nickname intro photo permited').exec().then(user => {
     logger.debug('获得用户的基本资料:%o', user);
     if (user) {
@@ -347,10 +383,16 @@ exports.exploreUser = function (uid) {
           return ret;
         })
       } else {
-        return Promise.reject({message: '该用户已被禁用！', code: 403});
+        return Promise.reject({
+          message: '该用户已被禁用！',
+          code: 403
+        });
       }
     } else {
-      return Promise.reject({message: '无该用户！', code: 404});
+      return Promise.reject({
+        message: '无该用户！',
+        code: 404
+      });
     }
   })
 };
@@ -363,9 +405,18 @@ exports.exploreUser = function (uid) {
  * @returns
  *
  */
-exports.exploreUserCollection = function (uid, cName, page = 1, perpage = 20) {
-  return Collection.findOne({owner: uid, name: cName}).exec().then(collection => {
-    return Hitokoto.find({creator_id: uid, fid: collection._id, state: 'public'}).sort({created_at: -1}).skip((page - 1) * perpage).limit(perpage).exec()
+exports.exploreUserCollection = function(uid, cName, page = 1, perpage = 20) {
+  return Collection.findOne({
+    owner: uid,
+    name: cName
+  }).exec().then(collection => {
+    return Hitokoto.find({
+      creator_id: uid,
+      fid: collection._id,
+      state: 'public'
+    }).sort({
+      created_at: -1
+    }).skip((page - 1) * perpage).limit(perpage).exec()
   })
 };
 /**
@@ -375,8 +426,10 @@ exports.exploreUserCollection = function (uid, cName, page = 1, perpage = 20) {
  * @param {String} email
  * @returns
  */
-exports.updateUserEmail = function (uid, email) {
-  return User.findByIdAndUpdate(uid, {email: email}).select('username nickname email').exec()
+exports.updateUserEmail = function(uid, email) {
+  return User.findByIdAndUpdate(uid, {
+    email: email
+  }).select('username nickname email').exec()
 };
 
 /**
@@ -387,7 +440,7 @@ exports.updateUserEmail = function (uid, email) {
  * @param {String} newpassword
  * @returns
  */
-exports.updateUserPassword = function (uid, oldpassword, newpassword) {
+exports.updateUserPassword = function(uid, oldpassword, newpassword) {
   return User.findById(uid).select('username password email').exec().then(user => {
     logger.debug('修改用户密码', user);
     if (user) {
@@ -399,7 +452,10 @@ exports.updateUserPassword = function (uid, oldpassword, newpassword) {
         return Promise.reject('原密码错误!');
       }
     } else {
-      return Promise.reject({message: '没有该用户！', code: 404});
+      return Promise.reject({
+        message: '没有该用户！',
+        code: 404
+      });
     }
   })
 };
@@ -410,26 +466,35 @@ exports.updateUserPassword = function (uid, oldpassword, newpassword) {
  * @param {String} password
  * @returns {Promise<{uid:String,nickname:String}>}
  */
-exports.userLogin = function (username, password) {
-  return User.findOne({username}).select('_id username password nickname permited role').exec().then(doc => {
+exports.userLogin = function(username, password) {
+  return User.findOne({
+    username
+  }).select('_id username password nickname permited role').exec().then(doc => {
     if (doc) {
       if (!doc.permited) {
-        return Promise.reject({message: '禁止该用户访问！请联系管理员', code: 403})
+        return Promise.reject({
+          message: '禁止该用户访问！请联系管理员',
+          code: 403
+        })
       }
       if (doc.password == password) {
         let role = doc.role,
           permission = 0;
         if (role) {
           role = role.split('|');
-          if (~ role.indexOf('reviewHito')) {
+          if (~role.indexOf('reviewHito')) {
             permission = permission | 1;
           }
-          if (~ role.indexOf('broadcast')) {
+          if (~role.indexOf('broadcast')) {
             permission = permission | 1 << 1;
           }
         }
 
-        return {uid: doc._id, nickname: doc.nickname, permission};
+        return {
+          uid: doc._id,
+          nickname: doc.nickname,
+          permission
+        };
       } else {
         return Promise.reject('密码错误！')
       }
@@ -448,12 +513,15 @@ exports.userLogin = function (username, password) {
  * @param {String} uid
  * @returns
  */
-exports.userCollections = function (uid) {
+exports.userCollections = function(uid) {
   return User.findById(uid).exec().then(user => {
 
     if (user) {
       if (!user.permited) {
-        return Promise.reject({message: '禁止该用户访问！请联系管理员', code: 403})
+        return Promise.reject({
+          message: '禁止该用户访问！请联系管理员',
+          code: 403
+        })
       }
 
       return user.myCollections().exec().then(collections => {
@@ -486,8 +554,11 @@ exports.userCollections = function (uid) {
  * @param {String} fid
  * @returns
  */
-exports.userCollectionCountPrivate = function (uid, fid) {
-  return Hitokoto.find({creator_id: uid, fid: fid}).count().exec().then(count => {
+exports.userCollectionCountPrivate = function(uid, fid) {
+  return Hitokoto.find({
+    creator_id: uid,
+    fid: fid
+  }).count().exec().then(count => {
     logger.debug(count);
     return count;
   })
@@ -500,14 +571,18 @@ exports.userCollectionCountPrivate = function (uid, fid) {
  * @param {String} collectionName
  * @returns
  */
-exports.userCollectionCountPublic = function (username, collectionName) {
+exports.userCollectionCountPublic = function(username, collectionName) {
   return User.findOne({
     nickname: username
-  }, {_id: 1}).exec().then(user => {
+  }, {
+    _id: 1
+  }).exec().then(user => {
     return Collection.find({
       owner: user._id,
       name: collectionName
-    }, {count: 1}).exec().then(collec => collec.count)
+    }, {
+      count: 1
+    }).exec().then(collec => collec.count)
   })
 
 }
@@ -519,7 +594,7 @@ exports.userCollectionCountPublic = function (username, collectionName) {
  * @param {String} newname
  * @returns
  */
-exports.updateUserCollectionName = function (uid, oldname, newname) {
+exports.updateUserCollectionName = function(uid, oldname, newname) {
   return User.findById(uid).exec().then(doc => {
     return doc.updateCollectionName(oldname, newname);
   })
@@ -532,12 +607,20 @@ exports.updateUserCollectionName = function (uid, oldname, newname) {
  * @param {String} newname
  * @returns
  */
-exports.newUserCollection = function (uid, newname, state = 'public') {
-  return Collection.findOne({owner: uid, name: newname}).exec().then(collection => {
+exports.newUserCollection = function(uid, newname, state = 'public') {
+  return Collection.findOne({
+    owner: uid,
+    name: newname
+  }).exec().then(collection => {
     if (collection) {
       return Promise.reject('已经存在该句集了！')
     } else {
-      return Collection.create({owner: uid, name: newname, count: 0, state})
+      return Collection.create({
+        owner: uid,
+        name: newname,
+        count: 0,
+        state
+      })
     }
   })
 }
@@ -548,13 +631,19 @@ exports.newUserCollection = function (uid, newname, state = 'public') {
  * @param {String} oldname
  * @returns
  */
-exports.deleteUserCollection = function (uid, oldname) {
-  return Collection.findOneAndRemove({owner: uid, name: oldname}).exec().then(collection => {
+exports.deleteUserCollection = function(uid, oldname) {
+  return Collection.findOneAndRemove({
+    owner: uid,
+    name: oldname
+  }).exec().then(collection => {
     if (!collection) {
       return Promise.reject('无该句集！');
     } else {
       let fid = collection._id;
-      return Collection.findOne({owner: uid, name: '默认句集'}).exec().then(defaultCollection => {
+      return Collection.findOne({
+        owner: uid,
+        name: '默认句集'
+      }).exec().then(defaultCollection => {
         return Promise.all([
           defaultCollection.update({
             $inc: {
@@ -582,9 +671,17 @@ exports.deleteUserCollection = function (uid, oldname) {
  * @param {String} name
  * @returns
  */
-exports.viewUserCollection = function (uid, name, page, perpage) {
-  return Collection.findOne({owner: uid, name: name}).then(collection => {
-    return Hitokoto.find({creator_id: uid, fid: collection._id}).sort({created_at: -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => hitokotos.map(hitokoto => hitokoto.toObject()))
+exports.viewUserCollection = function(uid, name, page, perpage) {
+  return Collection.findOne({
+    owner: uid,
+    name: name
+  }).then(collection => {
+    return Hitokoto.find({
+      creator_id: uid,
+      fid: collection._id
+    }).sort({
+      created_at: -1
+    }).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => hitokotos.map(hitokoto => hitokoto.toObject()))
   })
 }
 
@@ -596,12 +693,17 @@ exports.viewUserCollection = function (uid, name, page, perpage) {
  * @param {String} name
  * @returns
  */
-exports.createHitokoto = function (uid, name, hitokoto) {
-  return User.findById(uid, {nickname: 1}).then(user => {
+exports.createHitokoto = function(uid, name, hitokoto) {
+  return User.findById(uid, {
+    nickname: 1
+  }).then(user => {
 
     hitokoto.creator = user.nickname; //添加用户名
 
-    return Collection.findOne({owner: uid, name: name}).then(collection => {
+    return Collection.findOne({
+      owner: uid,
+      name: name
+    }).then(collection => {
 
       hitokoto.fid = collection._id; //添加fid
 
@@ -617,7 +719,10 @@ exports.createHitokoto = function (uid, name, hitokoto) {
           })
         }, e => {
           logger.info(e, '创建hitokto失败');
-          return Promise.reject({message: '创建hitokoto失败！！', code: 500})
+          return Promise.reject({
+            message: '创建hitokoto失败！！',
+            code: 500
+          })
         })
       } else {
         return Hitokoto.create(hitokoto)
@@ -634,12 +739,14 @@ exports.createHitokoto = function (uid, name, hitokoto) {
  * @param {Sting} hid
  * @returns
  */
-exports.updateHitokoto = function (uid, hid, hitokoto) {
+exports.updateHitokoto = function(uid, hid, hitokoto) {
 
   return Hitokoto.findOneAndUpdate({
     _id: hid,
     creator_id: uid
-  }, hitokoto, {new: false}).exec().then(oldHitokoto => {
+  }, hitokoto, {
+    new: false
+  }).exec().then(oldHitokoto => {
     if (!oldHitokoto) {
       return Promise.reject('更新失败！')
     }
@@ -690,11 +797,17 @@ exports.updateHitokoto = function (uid, hid, hitokoto) {
  * @param {Sting} hid
  * @returns
  */
-exports.deleteHitokoto = function (uid, hid) {
+exports.deleteHitokoto = function(uid, hid) {
 
-  return Hitokoto.findOneAndRemove({_id: hid, creator_id: uid}).exec().then(hitokoto => {
+  return Hitokoto.findOneAndRemove({
+    _id: hid,
+    creator_id: uid
+  }).exec().then(hitokoto => {
     if (!hitokoto) {
-      return Promise.reject({message: '找不到对应的句子！', code: 404})
+      return Promise.reject({
+        message: '找不到对应的句子！',
+        code: 404
+      })
     }
     if (hitokoto.state == 'public') {
       --GLOBAL_PUBLIC_HITOKOTO_NUMBER;
@@ -713,12 +826,16 @@ exports.deleteHitokoto = function (uid, hid) {
   })
 }
 
-exports.searchAllPublicHitokotos = function (page, perpage) {
+exports.searchAllPublicHitokotos = function(page, perpage) {
   page = page || 1;
   perpage = perpage || 20;
   return Hitokoto.find({
     state: 'public'
-  }, {__v: 0}).sort({"id": -1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
+  }, {
+    __v: 0
+  }).sort({
+    "id": -1
+  }).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
     logger.debug(hitokotos, '所有公开的用户');
     return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
       logger.debug(nameList, '名字');
@@ -740,7 +857,7 @@ exports.searchAllPublicHitokotos = function (page, perpage) {
  * @param {String} token - 口令
  * @returns {Promise<Document>}
  */
-exports.doEmailVerify = function (email, code, whatfor, token) {
+exports.doEmailVerify = function(email, code, whatfor, token) {
   // let LIMIT_10M = 30*60*1000;
   let LIMIT_30M = 1800000;
   let _10M_Before = Date.now() - LIMIT_30M;
@@ -756,7 +873,9 @@ exports.doEmailVerify = function (email, code, whatfor, token) {
     query.token = token;
   }
 
-  return Email.find(query).sort({time: -1}).exec().then((docs) => {
+  return Email.find(query).sort({
+    time: -1
+  }).exec().then((docs) => {
     if (docs.length == 0) {
       return Promise.reject('验证码错误或超时！');
     }
@@ -778,7 +897,7 @@ exports.doEmailVerify = function (email, code, whatfor, token) {
   })
 }
 
-exports.makeSureUserEmailBeforeUpdate = function (uid, email) {
+exports.makeSureUserEmailBeforeUpdate = function(uid, email) {
   let t = new Date();
   t.setMinutes(t.getMinutes() - 30);
 
@@ -805,7 +924,7 @@ exports.makeSureUserEmailBeforeUpdate = function (uid, email) {
  * @param {String} code
  * @returns  {Promise<String>}
  */
-exports.storeEmailVerify = function (email, code, whatfor, token) {
+exports.storeEmailVerify = function(email, code, whatfor, token) {
   let query = {
     email: email,
     code: code,
@@ -824,7 +943,7 @@ exports.storeEmailVerify = function (email, code, whatfor, token) {
  *
  * @param {String} {String : userAgent, userId, token, time}
  */
-exports.authActive = function ({ua, uid, token, ip}) {
+exports.authActive = function({ua, uid, token, ip}) {
   // let _30DAYS = 30 * 24 * 60 * 60 * 1000;
   let _30DAYS = 2592000000;
   return Token.create({
@@ -846,18 +965,37 @@ exports.authActive = function ({ua, uid, token, ip}) {
  * @param  {{ua:String,token:String}}
  * @returns
  */
-exports.authCheck = function ({ua, token}) {
-  return Token.findOne({token, ua, trust: true}).sort({time: -1}).exec().then(token => {
+exports.authCheck = function({ua, token}) {
+  return Token.findOne({
+    token,
+    ua,
+    trust: true
+  }).sort({
+    time: -1
+  }).exec().then(token => {
     if (token) {
       let expireTime = token.time;
       if (Date.now() < expireTime) {
-        return {uid: token.uid, code: 200}
+        return {
+          uid: token.uid,
+          code: 200
+        }
       } else {
-        logger.warn({message: '用户授权已过期', uid});
-        return {uid: token.uid, message: '授权过期，请重新登录', code: 403}
+        logger.warn({
+          message: '用户授权已过期',
+          uid: token.uid
+        });
+        return {
+          uid: token.uid,
+          message: '授权过期，请重新登录',
+          code: 403
+        }
       }
     } else {
-      return {message: '授权失败', code: 403}
+      return {
+        message: '授权失败',
+        code: 403
+      }
     }
   }).catch(e => {
     logger.debug('save token', e)
@@ -871,8 +1009,11 @@ exports.authCheck = function ({ua, token}) {
  * @param {String} {ua, token}
  * @returns
  */
-exports.authTerminate = function ({ua, token}) {
-  return Token.findOne({token, ua}).exec().then(tokenDoc => {
+exports.authTerminate = function({ua, token}) {
+  return Token.findOne({
+    token,
+    ua
+  }).exec().then(tokenDoc => {
     if (tokenDoc) {
       if (tokenDoc.trust) {
         tokenDoc.trust = false;
@@ -893,9 +1034,11 @@ exports.authTerminate = function ({ua, token}) {
   })
 }
 
-exports.getPublicHitokotoCount = function () {
+exports.getPublicHitokotoCount = function() {
   if (GLOBAL_PUBLIC_HITOKOTO_NUMBER === null) {
-    return Hitokoto.count({state: 'public'}).exec().then(count => {
+    return Hitokoto.count({
+      state: 'public'
+    }).exec().then(count => {
       GLOBAL_PUBLIC_HITOKOTO_NUMBER = count;
       return GLOBAL_PUBLIC_HITOKOTO_NUMBER;
     });
@@ -911,18 +1054,35 @@ exports.getPublicHitokotoCount = function () {
 /**
  * 跨域获取某一个集合内的hitokoto;
  */
-exports.corsUserCollection = function (username, collectionName, lastMagicNumber) {
-  return User.findOne({nickname: username}).exec().then(user => {
+exports.corsUserCollection = function(username, collectionName, lastMagicNumber) {
+  return User.findOne({
+    nickname: username
+  }).exec().then(user => {
     if (!user) {
-      return Promise.reject({message: '用户不存在！', code: 404})
+      return Promise.reject({
+        message: '用户不存在！',
+        code: 404
+      })
     } else if (!user.permited) {
-      return Promise.reject({message: '用户被封禁！', code: 403})
+      return Promise.reject({
+        message: '用户被封禁！',
+        code: 403
+      })
     } else {
-      return Collection.findOne({owner: user._id, name: collectionName}).exec().then(collection => {
+      return Collection.findOne({
+        owner: user._id,
+        name: collectionName
+      }).exec().then(collection => {
         if (!collection) {
-          return Promise.reject({message: '句集不存在！', code: 404})
+          return Promise.reject({
+            message: '句集不存在！',
+            code: 404
+          })
         } else if (collection.state !== 'public') {
-          return Promise.reject({message: '该句集不公开，无法获取！', code: 403})
+          return Promise.reject({
+            message: '该句集不公开，无法获取！',
+            code: 403
+          })
         } else {
           let count = collection.count;
           let skipCount;
@@ -935,13 +1095,18 @@ exports.corsUserCollection = function (username, collectionName, lastMagicNumber
             creator_id: user._id,
             fid: collection._id,
             state: 'public'
-          }, {__v: 0}).skip(skipCount).limit(1).exec().then(hitokoto => {
+          }, {
+            __v: 0
+          }).skip(skipCount).limit(1).exec().then(hitokoto => {
             if (hitokoto.length) {
               hitokoto = hitokoto[0].toObject();
               hitokoto.collection = collection.name;
               return hitokoto;
             } else {
-              return Promise.reject({message: '集合内容为空', code: 404})
+              return Promise.reject({
+                message: '集合内容为空',
+                code: 404
+              })
             }
           });
         }
@@ -953,8 +1118,11 @@ exports.corsUserCollection = function (username, collectionName, lastMagicNumber
 /**
  * 跨域获取某一个集合内的hitokoto;
  */
-exports.noCorsUserCollection = function (uid, fid, lastMagicNumber) {
-  return Hitokoto.count({creator_id: uid, fid: fid}).exec().then(count => {
+exports.noCorsUserCollection = function(uid, fid, lastMagicNumber) {
+  return Hitokoto.count({
+    creator_id: uid,
+    fid: fid
+  }).exec().then(count => {
 
     let skipCount;
     if (lastMagicNumber) {
@@ -965,25 +1133,37 @@ exports.noCorsUserCollection = function (uid, fid, lastMagicNumber) {
     return Hitokoto.find({
       creator_id: uid,
       fid: fid
-    }, {__v: 0}).skip(skipCount).limit(1).exec().then(hitokoto => {
+    }, {
+      __v: 0
+    }).skip(skipCount).limit(1).exec().then(hitokoto => {
       if (hitokoto.length) {
         hitokoto = hitokoto[0].toObject();
-        return Collection.findById(fid, {name: 1}).exec().then(collection => {
+        return Collection.findById(fid, {
+          name: 1
+        }).exec().then(collection => {
 
           hitokoto.collection = collection.name;
           return hitokoto;
 
         })
       } else {
-        return Promise.reject({message: '集合内容为空', code: 404})
+        return Promise.reject({
+          message: '集合内容为空',
+          code: 404
+        })
       }
     });
   })
 }
 
-exports.syncCollection = function (uid, fid, last) {
+exports.syncCollection = function(uid, fid, last) {
   if (!last) {
-    return Hitokoto.find({creator_id: uid, fid: fid}).sort({_id: 1}).limit(100).exec()
+    return Hitokoto.find({
+      creator_id: uid,
+      fid: fid
+    }).sort({
+      _id: 1
+    }).limit(100).exec()
   } else {
     return Hitokoto.find({
       _id: {
@@ -991,29 +1171,47 @@ exports.syncCollection = function (uid, fid, last) {
       },
       creator_id: uid,
       fid: fid
-    }).sort({_id: 1}).limit(100).exec()
+    }).sort({
+      _id: 1
+    }).limit(100).exec()
   }
 }
 
-exports.syncPublicCollection = function (username, collectionName, last) {
+exports.syncPublicCollection = function(username, collectionName, last) {
   return User.findOne({
     nickname: username
-  }, {_id: 1}).exec().then(user => {
+  }, {
+    _id: 1
+  }).exec().then(user => {
     if (!user) {
-      return Promise.reject({message: '用户不存在', code: 404})
+      return Promise.reject({
+        message: '用户不存在',
+        code: 404
+      })
     }
     let uid = user._id;
     return Collection.findOne({
       owner: uid,
       name: collectionName
-    }, {_id: 1}).exec().then(collection => {
+    }, {
+      _id: 1
+    }).exec().then(collection => {
       if (!collection) {
-        return Promise.reject({message: '句集不存在！可能改名字了！', code: 404})
+        return Promise.reject({
+          message: '句集不存在！可能改名字了！',
+          code: 404
+        })
       }
       let fid = collection._id;
 
       if (!last) {
-        return Hitokoto.find({creator_id: uid, fid: fid, state: 'public'}).sort({_id: 1}).limit(100).exec()
+        return Hitokoto.find({
+          creator_id: uid,
+          fid: fid,
+          state: 'public'
+        }).sort({
+          _id: 1
+        }).limit(100).exec()
       } else {
         return Hitokoto.find({
           _id: {
@@ -1022,7 +1220,9 @@ exports.syncPublicCollection = function (username, collectionName, last) {
           creator_id: uid,
           fid: fid,
           state: 'public'
-        }).sort({_id: 1}).limit(100).exec()
+        }).sort({
+          _id: 1
+        }).limit(100).exec()
       }
     })
   })
@@ -1033,7 +1233,7 @@ exports.syncPublicCollection = function (username, collectionName, last) {
  * 跨域获取某一个集合内的hitokoto;
  * //TODO
  */
-exports.corsGetOneRandom = function (lastMagicNumber) {
+exports.corsGetOneRandom = function(lastMagicNumber) {
 
   return exports.getPublicHitokotoCount().then(count => {
     let skipCount;
@@ -1044,7 +1244,11 @@ exports.corsGetOneRandom = function (lastMagicNumber) {
     }
     return Hitokoto.find({
       state: 'public'
-    }, {__v: 0}).sort({id: -1}).skip(skipCount).limit(1).exec().then(hitokoto => {
+    }, {
+      __v: 0
+    }).sort({
+      id: -1
+    }).skip(skipCount).limit(1).exec().then(hitokoto => {
       if (hitokoto.length) {
         hitokoto = hitokoto[0];
         return hitokoto.getMyCollectionName().then(name => {
@@ -1053,15 +1257,20 @@ exports.corsGetOneRandom = function (lastMagicNumber) {
           return hitokoto;
         })
       } else {
-        return Promise.reject({message: '集合内容为空', code: 404})
+        return Promise.reject({
+          message: '集合内容为空',
+          code: 404
+        })
       }
     });
   });
 
 }
 
-exports.storeBackup = function (uid, data) {
-  return User.findById(uid, {sourcesAndPatterns: 1}).exec().then(user => {
+exports.storeBackup = function(uid, data) {
+  return User.findById(uid, {
+    sourcesAndPatterns: 1
+  }).exec().then(user => {
     if (user) {
       user.sourcesAndPatterns = data;
       user.markModified('sourcesAndPatterns');
@@ -1072,8 +1281,10 @@ exports.storeBackup = function (uid, data) {
   })
 }
 
-exports.getBackup = function (uid) {
-  return User.findById(uid, {sourcesAndPatterns: 1}).exec().then(user => {
+exports.getBackup = function(uid) {
+  return User.findById(uid, {
+    sourcesAndPatterns: 1
+  }).exec().then(user => {
     if (user) {
       return user.sourcesAndPatterns
     } else {
@@ -1082,19 +1293,22 @@ exports.getBackup = function (uid) {
   })
 }
 
-exports.roleCheck = function (uid, role) {
-  return User.findById(uid, {role: 1}).exec().then(user => {
+exports.roleCheck = function(uid, role) {
+  return User.findById(uid, {
+    role: 1
+  }).exec().then(user => {
     if (!user) {
       return Promise.reject('用户不存在！');
     } else if (user.role) {
 
       let roles = user.role.split('|');
-      if (~ roles.findIndex(r => r == role)) {
+      if (~roles.findIndex(r => r == role)) {
         //找到了;
         return true;
       } else {
         return Promise.reject('无权限！')
-      };
+      }
+      ;
     } else {
       return Promise.reject('无权限！')
     }
@@ -1103,10 +1317,12 @@ exports.roleCheck = function (uid, role) {
 
 //Admin method
 
-exports.changeHitokotoState = function (hid, state) {
+exports.changeHitokotoState = function(hid, state) {
   return Hitokoto.findByIdAndUpdate(hid, {
     state
-  }, {new: false}).then(old => {
+  }, {
+    new: false
+  }).then(old => {
     //
     if (old.state == 'public') {
       if (state == 'public') {
@@ -1157,16 +1373,22 @@ exports.changeHitokotoState = function (hid, state) {
 
 }
 
-exports.getNeedReviewingHitokotosCount = function () {
-  return Hitokoto.find({state: 'reviewing'}).count()
+exports.getNeedReviewingHitokotosCount = function() {
+  return Hitokoto.find({
+    state: 'reviewing'
+  }).count()
 }
 
-exports.getNeedReviewingHitokotos = function (page, perpage) {
+exports.getNeedReviewingHitokotos = function(page, perpage) {
   page = page || 1;
   perpage = perpage || 20;
   return Hitokoto.find({
     state: 'reviewing'
-  }, {__v: 0}).sort({"id": 1}).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
+  }, {
+    __v: 0
+  }).sort({
+    "id": 1
+  }).skip((page - 1) * perpage).limit(perpage).exec().then(hitokotos => {
     logger.debug(hitokotos, '所有需要review的句子');
     return Promise.all(hitokotos.map(hito => hito.getMyCollectionName())).then(nameList => {
       logger.debug(nameList, '名字');
@@ -1180,7 +1402,7 @@ exports.getNeedReviewingHitokotos = function (page, perpage) {
 }
 
 //Broadcast
-exports.getBroadcasts = function () {
+exports.getBroadcasts = function() {
   return Broadcast.find({
     endAt: {
       $gt: new Date()
@@ -1188,12 +1410,14 @@ exports.getBroadcasts = function () {
   }).exec()
 }
 
-exports.putBroadcast = function (b) {
+exports.putBroadcast = function(b) {
   return Broadcast.create(b)
 }
-exports.updateBroadcast = function (bid, broadcast) {
-  return Broadcast.findByIdAndUpdate(bid, broadcast, {new: true}).exec()
+exports.updateBroadcast = function(bid, broadcast) {
+  return Broadcast.findByIdAndUpdate(bid, broadcast, {
+    new: true
+  }).exec()
 }
-exports.deleteBroadcast = function (bid) {
+exports.deleteBroadcast = function(bid) {
   return Broadcast.findByIdAndRemove(bid).exec()
 }
