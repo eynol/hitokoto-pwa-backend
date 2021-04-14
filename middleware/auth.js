@@ -3,8 +3,7 @@ const crypto = require('crypto-js');
 const validator = require('validator');
 const errs = require('restify-errors');
 
-const config = require('./auth.config.json');
-const secret = config.secret;
+const secret = process.env.SECRET;
 
 function generateAuthToken() {
   return crypto.HmacSHA1('you are awesome!Now:' + Date.now(), secret).toString() + crypto.HmacSHA1('youcantseeme' + (Date.now() + Date.now()), secret).toString();

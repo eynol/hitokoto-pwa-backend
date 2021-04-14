@@ -1,8 +1,5 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
-const config = require('./mongo.hito.secret.config.json');
-const co = require('co');
-const path = require('path');
 const bunyan = require('../logger');
 
 let logger = bunyan.logger.child({
@@ -15,7 +12,7 @@ autoIncrement.setDefaults({
 });
 
 mongoose.Promise = global.Promise;
-mongoose.connect(config.db, {
+mongoose.connect(process.env.MONGODB_CONN, {
   useMongoClient: true
 });
 

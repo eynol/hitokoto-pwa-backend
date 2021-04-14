@@ -1,6 +1,5 @@
 'use strict';
 const nodemailer = require('nodemailer');
-const config = require('./email.hito.secret.config.json');
 
 const templates = require('./email-templates');
 
@@ -8,8 +7,8 @@ const templates = require('./email-templates');
 let transporter = nodemailer.createTransport({
   host: 'smtp.qq.com', port: 465, secure: true, // secure:true for port 465, secure:false for port 587
   auth: {
-    user: config.user,
-    pass: config.pass
+    user: process.env.QQMAIL_NAME,
+    pass: process.env.QQMAIL_PASS 
   }
 });
 

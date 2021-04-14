@@ -1,3 +1,6 @@
+// take env config
+require('dotenv').config() 
+
 const restify = require('restify');
 const corsMiddleware = require('restify-cors-middleware')
 const validator = require('validator');
