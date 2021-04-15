@@ -7,6 +7,8 @@ QQMAIL_NAME=xxxx@qq.com
 QQMAIL_PASS=xxxx
 # secret for encoding message
 SECRET=xxxx
+# allowed cors origin urls, https: and http: are different
+CORS_URLS=https://hitokoto.heitaov.cn|http://localhost:9999
 ```
 
 # Build web resources
