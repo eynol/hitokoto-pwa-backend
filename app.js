@@ -6,7 +6,7 @@ const corsMiddleware = require('restify-cors-middleware')
 const validator = require('validator');
 const path = require('path');
 const errs = require('restify-errors');
-
+const fs = require('fs')
 const mongoServer = require('./mongo');
 const emailServer = require('./mailpush/index.js');
 const authMiddleware = require('./middleware/auth')
@@ -14,7 +14,6 @@ const appUtil = require('./util');
 const bunyan = require('./logger');
 
 const cors = corsMiddleware({ origins: ['*'], allowHeaders: ['API-Token'], exposeHeaders: ['API-Token-Expiry'] })
-// var $regist = require('./routes/regist.js');
 
 const whitelistapi = [(/^\/cors/)];
 let CURRENTHOST;
@@ -136,7 +135,10 @@ server.use((function broadMessagePicker() {
 //   }, res.rejectedCommon(next));
 
 // });
-
+server.get('/ping', function (req, res, next) {
+  res.send(200, 'pong');
+  return next();
+});
 server.get('/.*', restify.plugins.serveStatic({
   directory: './frontend/build',
   maxAge: 3600000, // this is in millisecs
@@ -146,10 +148,10 @@ server.get('/.*', restify.plugins.serveStatic({
   charSet: 'utf-8'
 }))
 
-server.get('/debug', function (req, res, next) {
-  res.send(200, server.getDebugInfo());
-  return next();
-});
+// server.get('/debug', function (req, res, next) {
+//   res.send(200, server.getDebugInfo());
+//   return next();
+// });
 
 server.get('/debug/email/:email', function (req, res, next) {
   let { email } = req.params

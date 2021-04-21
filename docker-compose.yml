@@ -1,0 +1,26 @@
+version: '3'
+services: 
+    hitokoto:
+        depends_on:
+            - mongodb
+        build: .
+        container_name: hitokoto
+        volumes: 
+            - ./frontend/build:/app/frontend/build
+        labels: 
+            - traefik.enable=true
+            - traefik.http.routers.hitokoto.rule=Host(`hitokoto.heitaov.cn`)
+        networks:
+            - inner
+            - traefik 
+    mongodb:
+        image: 'mongo'
+        networks: 
+            - inner
+        volumes: 
+            - ./database:/data/db
+            - ./dump:/dump
+networks: 
+    inner:
+    traefik:
+        external: true

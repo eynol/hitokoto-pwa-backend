@@ -56,8 +56,11 @@ typings/
 
 # dotenv environment variables file
 .env
+.env_raw
 
 .vscode
 mailpush/config.json
 middleware/auth.config.json
 *.hito.secret.config.json
+database/
+dump/
